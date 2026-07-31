@@ -75,6 +75,53 @@ def _subset(
     return df
 
 
+def _checkpoint_state(
+    model: torch.nn.Module,
+    ema,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    cfg,
+    *,
+    epoch: int,
+    best: float,
+    calib: dict,
+) -> dict:
+    """Всё, что нужно, чтобы продолжить прогон ровно с этой точки.
+
+    Состояние шедулера лежит здесь рядом с оптимизатором не для симметрии:
+    шедулер строится заново на каждом запуске и в `__init__` выставляет LR
+    начала warmup. Без этого ключа resume с середины косинуса откатывал LR к
+    прогревочному и проходил расписание по второму кругу.
+    """
+    return {
+        "model": model.state_dict(),
+        "ema": ema.module.state_dict() if ema is not None else None,
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict() if scheduler is not None else None,
+        "epoch": epoch,
+        "best": best,
+        "cfg": dict(cfg),
+        "calib": calib,
+    }
+
+
+def _restore_state(state: dict, model, optimizer, scheduler, ema) -> tuple[int, float]:
+    """Разворачивает чекпоинт обратно; возвращает эпоху продолжения и лучший AIC.
+
+    Порядок важен: `optimizer.load_state_dict` возвращает param_groups (вместе
+    с их lr) на момент сохранения, поэтому шедулер восстанавливаем после него.
+    `state.get` вместо `state[...]` — чекпоинты, записанные до появления ключа,
+    должны читаться по-прежнему, просто без расписания.
+    """
+    model.load_state_dict(state["model"])
+    optimizer.load_state_dict(state["optimizer"])
+    if scheduler is not None and state.get("scheduler"):
+        scheduler.load_state_dict(state["scheduler"])
+    if ema is not None and state.get("ema"):
+        ema.module.load_state_dict(state["ema"])
+    return state["epoch"] + 1, state.get("best", -1.0)
+
+
 def worker_init_fn(worker_id: int) -> None:
     """Индивидуальный, но детерминированный сид каждому воркеру DataLoader.
 
@@ -192,11 +239,7 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
     start_epoch, best = 0, -1.0
     if resume:
         state = torch.load(resume, map_location=device, weights_only=False)
-        model.load_state_dict(state["model"])
-        optimizer.load_state_dict(state["optimizer"])
-        if ema is not None and state.get("ema"):
-            ema.module.load_state_dict(state["ema"])
-        start_epoch, best = state["epoch"] + 1, state.get("best", -1.0)
+        start_epoch, best = _restore_state(state, model, optimizer, scheduler, ema)
         logger.info(f"продолжаю с эпохи {start_epoch}, лучший AIC пока {best:.4f}")
 
     epochs = int(cfg.train.get("epochs", 10))
@@ -249,15 +292,10 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
             f"val_loss={val_stats['val_loss']:.4f} | {tuned}"
         )
 
-        state = {
-            "model": model.state_dict(),
-            "ema": ema.module.state_dict() if ema is not None else None,
-            "optimizer": optimizer.state_dict(),
-            "epoch": epoch,
-            "best": best,
-            "cfg": dict(cfg),
-            "calib": tuned.as_dict(),
-        }
+        state = _checkpoint_state(
+            model, ema, optimizer, scheduler, cfg,
+            epoch=epoch, best=best, calib=tuned.as_dict(),
+        )
         torch.save(state, run_dir / "ckpt" / "last.pt")
 
         if tuned.aic > best:

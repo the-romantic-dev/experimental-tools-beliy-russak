@@ -139,14 +139,25 @@ def train_one_epoch(
                     scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             if scaler is not None and scaler.is_enabled():
+                # при inf/NaN в градиентах scaler молча пропускает шаг и делит
+                # масштаб пополам; вверх масштаб тоже двигается (раз в 2000
+                # удачных шагов), поэтому пропуск ловится сравнением, а не равенством
+                scale_before = scaler.get_scale()
                 scaler.step(optimizer)
                 scaler.update()
+                stepped = scaler.get_scale() >= scale_before
             else:
                 optimizer.step()
+                stepped = True
             optimizer.zero_grad(set_to_none=True)
             if ema is not None:
                 ema.update(model)
-            if scheduler is not None:
+            # расписание двигается только вслед за реальным шагом весов. На
+            # первой итерации fp16 стартовый масштаб 65536 почти всегда даёт
+            # переполнение, и безусловный step() уводил LR вперёд пропущенного
+            # апдейта — плюс ровно на нём срабатывало предупреждение torch
+            # «lr_scheduler.step() before optimizer.step()».
+            if scheduler is not None and stepped:
                 scheduler.step()
 
         meters["loss"].update(float(loss.detach()), images.size(0))
