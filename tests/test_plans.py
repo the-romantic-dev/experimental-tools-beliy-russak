@@ -36,24 +36,24 @@ def _write_plan(tmp_path, data: dict, name: str = "plan.yaml"):
 
 def test_plain_list_keeps_order(tmp_path):
     path = _write_plan(tmp_path, {"name": "s", "runs": [
-        {"config": "e0_control"}, {"config": "e2_area"}, {"config": "e1_res768"},
+        {"config": "baseline"}, {"config": "fast_cache_384"}, {"config": "smoke"},
     ]})
     plan_name, queue = load_plan(path)
     assert plan_name == "s"
-    assert [r.config for r in queue] == ["e0_control", "e2_area", "e1_res768"]
+    assert [r.config for r in queue] == ["baseline", "fast_cache_384", "smoke"]
     # имя берётся из самого конфига, как при обычном train -c
-    assert [r.name for r in queue] == ["e0-control-512", "e2-area", "e1-res768"]
+    assert [r.name for r in queue] == ["baseline-unet-convnext-512", "fast-384", "smoke"]
 
 
 def test_bare_string_is_a_valid_run(tmp_path):
-    path = _write_plan(tmp_path, {"runs": ["e0_control"]})
+    path = _write_plan(tmp_path, {"runs": ["baseline"]})
     _, queue = load_plan(path)
-    assert queue[0].config == "e0_control"
+    assert queue[0].config == "baseline"
 
 
 def test_grid_expands_to_cartesian_product(tmp_path):
     path = _write_plan(tmp_path, {"runs": [{
-        "config": "e2_area", "name": "sweep",
+        "config": "baseline", "name": "sweep",
         "grid": {"data.small_area_fraction": [0.3, 0.5],
                  "loss.area.small_weight": [1.0, 2.0]},
     }]})
@@ -69,8 +69,8 @@ def test_defaults_apply_everywhere_but_lose_to_explicit_set(tmp_path):
     path = _write_plan(tmp_path, {
         "defaults": {"train.epochs": 4},
         "runs": [
-            {"config": "e0_control"},
-            {"config": "e2_area", "set": {"train.epochs": 9}},
+            {"config": "baseline"},
+            {"config": "fast_cache_384", "set": {"train.epochs": 9}},
         ],
     })
     _, queue = load_plan(path)
@@ -80,7 +80,7 @@ def test_defaults_apply_everywhere_but_lose_to_explicit_set(tmp_path):
 
 def test_duplicate_names_are_rejected(tmp_path):
     """Два прогона с одним именем затёрли бы результаты друг друга."""
-    path = _write_plan(tmp_path, {"runs": [{"config": "e0_control"}, {"config": "e0_control"}]})
+    path = _write_plan(tmp_path, {"runs": [{"config": "baseline"}, {"config": "baseline"}]})
     with pytest.raises(ValueError, match="имена прогонов повторяются"):
         load_plan(path)
 
@@ -108,7 +108,7 @@ def test_overrides_survive_the_round_trip(value):
     """План хранит значения как объекты, а train принимает строки `key=value`.
     Сериализация обязана возвращать ровно то же значение, иначе прогон тихо
     поедет не с теми параметрами."""
-    run = PlannedRun("e0_control", "проба", {"data.aug": value})
+    run = PlannedRun("baseline", "проба", {"data.aug": value})
     cfg: dict = {}
     for override in run.as_cli_overrides():
         apply_override(cfg, override)

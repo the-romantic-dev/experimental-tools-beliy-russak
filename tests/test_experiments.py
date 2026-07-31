@@ -253,8 +253,8 @@ def _batch(area: float, size: int = 8) -> dict:
 
 
 def test_loss_without_area_profile_is_bit_identical_to_plain_sum():
-    """Режим по умолчанию не должен ничего менять: иначе e0_control нельзя
-    сопоставлять ни с одним прошлым прогоном."""
+    """Режим по умолчанию не должен ничего менять: иначе опорный прогон нельзя
+    сопоставлять ни с одним прошлым."""
     criterion = build_loss({"seg": {"bce": 1.0, "dice": 1.0}, "cls_weight": 0.0})
     logits = torch.randn(4, 1, 8, 8)
     targets = (torch.rand(4, 1, 8, 8) > 0.5).float()
