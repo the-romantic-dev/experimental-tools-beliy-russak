@@ -104,9 +104,15 @@ def build_dataloaders(cfg: Cfg, logger: RunLogger) -> tuple[DataLoader, DataLoad
     train_df = folds[folds["fold"] != fold].reset_index(drop=True)
     val_df = folds[folds["fold"] == fold].reset_index(drop=True)
 
+    # Состав валидации намеренно НЕ зависит от `seed`: иначе прогон с другим
+    # сидом мерился бы на другой подвыборке, и разница между ним и опорным
+    # прогоном смешивала бы шум обучения с шумом выборки валидации. Ровно эту
+    # смесь и получил бы замер пола шума (f1_seed7), ради которого всё затевалось.
+    val_seed = int(cfg.data.get("val_seed", 42))
+
     train_df = _subset(train_df, cfg.data.get("train_frac"), cfg.data.get("train_limit"), seed)
     val_df = _subset(
-        val_df, cfg.data.get("val_frac"), cfg.data.get("val_limit"), seed,
+        val_df, cfg.data.get("val_frac"), cfg.data.get("val_limit"), val_seed,
         keep_negatives=bool(cfg.data.get("val_keep_negatives", True)),
     )
 

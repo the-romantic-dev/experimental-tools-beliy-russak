@@ -62,6 +62,7 @@ SCHEMA: dict[str, Any] = {
         "small_area_fraction": LEAF,
         "small_area_threshold": LEAF,
         "val_keep_negatives": LEAF,
+        "val_seed": LEAF,
         "epoch_size": LEAF,
         "train_frac": LEAF,
         "val_frac": LEAF,
