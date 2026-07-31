@@ -17,6 +17,7 @@ from typing import Any, Iterable
 
 import yaml
 
+from .schema import check_config
 from .workspace import configs_root, project_root
 
 
@@ -115,11 +116,24 @@ def apply_override(cfg: dict, dotted_assignment: str) -> None:
     node[parts[-1]] = value
 
 
-def load_config(spec: str | Path, overrides: Iterable[str] | None = None) -> Cfg:
+def load_config(
+    spec: str | Path,
+    overrides: Iterable[str] | None = None,
+    *,
+    check: bool = True,
+) -> Cfg:
+    """Собрать конфиг из файла, его баз и переопределений из командной строки.
+
+    `check=False` отключает проверку имён ключей — нужно там, где конфиг
+    заведомо частичный (например, снапшот старого прогона).
+    """
     cfg = _load_raw(spec)
     for override in overrides or []:
         apply_override(cfg, override)
     cfg.setdefault("_source", _describe_source(_resolve_config_path(spec)))
+
+    if check:
+        check_config(cfg, source=str(cfg["_source"]))
 
     # ключ `plugins` подтягивает чужие компоненты до того, как конфиг пойдёт в
     # билдеры; `aic_plugins.py` воркспейса грузится и без этого ключа

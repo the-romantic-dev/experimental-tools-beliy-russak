@@ -77,14 +77,22 @@ def adam(param_groups, cfg_train):
 # --------------------------------------------------------------------------
 # планировщик
 # --------------------------------------------------------------------------
-# В конфиге:  train: {scheduler: step, step_gamma: 0.3}
+# В конфиге:
+#     train:
+#       scheduler: step
+#       step: {gamma: 0.3}      # параметры — в секции с именем компоненты
 
 @register_scheduler("step")
 def step_decay(optimizer, cfg_train, total_steps, warmup_steps):
     """`total_steps` и `warmup_steps` библиотека считает сама — она знает и длину
     эпохи, и накопление градиента. Планировщик шагает по СТУПЕНЯМ ОПТИМИЗАТОРА,
-    а не по эпохам."""
-    gamma = float(cfg_train.get("step_gamma", 0.3))
+    а не по эпохам.
+
+    Свои параметры клади в `train.<имя компоненты>`: проверка конфига считает
+    такую секцию своей и не ругается. Ключ россыпью в `train` вызовет
+    предупреждение — он неотличим от опечатки.
+    """
+    gamma = float((cfg_train.get("step") or {}).get("gamma", 0.3))
     milestones = [int(total_steps * part) for part in (0.5, 0.8)]
     return torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=gamma)
 

@@ -11,6 +11,22 @@ submissions/
 # Личные компоненты воркспейса; образец лежит в docs/aic_plugins.example.py
 aic_plugins.py
 
+# Конфиги и планы: в репозитории только примеры и smoke. Рабочие гипотезы
+# остаются локальными у каждого — они и есть содержание исследования.
+configs/*
+!configs/_base.yaml
+!configs/smoke.yaml
+!configs/baseline.yaml
+!configs/fast_cache_384.yaml
+!configs/segformer_mit_b2.yaml
+!configs/upernet_convnext_640.yaml
+
+plans/*
+!plans/example.yaml
+
+# Разборы результатов — тоже локальные
+docs/experiments_*.md
+
 # Python
 __pycache__/
 *.py[cod]
