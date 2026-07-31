@@ -81,6 +81,10 @@ SCHEMA: dict[str, Any] = {
         "fuse": LEAF,
         "stream_width": LEAF,
         "hf_name": LEAF,
+        # имена голов проверяет реестр AUX_HEADS при сборке модели, а не схема
+        "aux_heads": OPEN,
+        # параметры конструктора энкодера: их набор задаёт timm, не мы
+        "encoder_kwargs": OPEN,
     },
 
     "loss": {

@@ -20,6 +20,22 @@ from .registry import OPTIMIZERS, SCHEDULERS, register_optimizer, register_sched
 from .utils import AverageMeter, format_seconds
 
 
+#: не-целевые поля батча: индексы и размеры нужны на CPU, а тензорами не являются
+_NON_TARGET = {"image", "index", "orig_h", "orig_w", "valid_h", "valid_w", "name"}
+
+
+def _TARGET_KEYS(batch: dict) -> list[str]:
+    """Поля батча, которые надо перенести на device.
+
+    Список раньше был захардкожен ("mask", "label", "area"), и любая новая цель
+    молча оставалась на CPU до первой ошибки про несовпадение устройств.
+    """
+    return [
+        key for key, value in batch.items()
+        if key not in _NON_TARGET and isinstance(value, torch.Tensor)
+    ]
+
+
 def _amp_dtype(name: str) -> torch.dtype | None:
     return {"fp16": torch.float16, "bf16": torch.bfloat16, "off": None, "none": None}[name]
 
@@ -104,9 +120,8 @@ def train_one_epoch(
             break
 
         images = batch["image"].to(device, non_blocking=True, memory_format=torch.channels_last)
-        for key in ("mask", "label", "area"):
-            if key in batch:
-                batch[key] = batch[key].to(device, non_blocking=True)
+        for key in _TARGET_KEYS(batch):
+            batch[key] = batch[key].to(device, non_blocking=True)
 
         with torch.amp.autocast("cuda", dtype=dtype, enabled=dtype is not None):
             outputs = model(images)
@@ -176,8 +191,8 @@ def validate(
         images = batch["image"].to(device, non_blocking=True, memory_format=torch.channels_last)
         masks = batch["mask"].to(device, non_blocking=True)
         batch["mask"] = masks
-        for key in ("label", "area"):
-            if key in batch:
+        for key in _TARGET_KEYS(batch):
+            if key != "mask":  # маску уже перенесли выше
                 batch[key] = batch[key].to(device, non_blocking=True)
 
         with torch.amp.autocast("cuda", dtype=dtype, enabled=dtype is not None):

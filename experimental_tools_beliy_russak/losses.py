@@ -41,6 +41,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .geometry import normalize_area
 from .registry import LOSSES, register_loss
 
 
@@ -128,8 +129,12 @@ def _params_for(cfg_loss: dict, name: str) -> dict:
 
 
 class CombinedLoss(nn.Module):
-    def __init__(self, cfg_loss: dict) -> None:
+    def __init__(self, cfg_loss: dict, aux_weights: dict[str, float] | None = None) -> None:
         super().__init__()
+        # веса вспомогательных голов приходят из model.aux_heads, а не из loss:
+        # там же перечислено, какие головы вообще собираются, и держать список
+        # в двух местах — верный способ их рассинхронизировать
+        self.aux_weights = dict(aux_weights or {})
         seg = dict(cfg_loss.get("seg", {"bce": 1.0, "dice": 1.0}))
         self.weights = {k: float(v) for k, v in seg.items() if float(v) != 0.0}
         if not self.weights:
@@ -213,8 +218,58 @@ class CombinedLoss(nn.Module):
             stats["cls"] = float(cls.detach())
             total = total + self.cls_weight * cls
 
+        for name, weight in self.aux_weights.items():
+            value = self._aux_component(name, outputs, batch, logits)
+            if value is None:
+                continue
+            stats[f"aux_{name}"] = float(value.detach())
+            total = total + weight * value
+
         return total, stats
 
+    def _aux_component(self, name, outputs, batch, logits):
+        """Лосс одной вспомогательной головы, или None если её нет в выходе."""
+        from .models.aux_heads import AUX_HEADS
 
-def build_loss(cfg_loss: dict) -> CombinedLoss:
-    return CombinedLoss(cfg_loss)
+        prediction = outputs.get(f"aux_{name}")
+        if prediction is None:
+            return None
+
+        spec = AUX_HEADS[name]
+        if name == "area":
+            # цель считается из сырой площади нормировкой, а не хранится
+            # отдельным полем: иначе в батче было бы два похожих числа
+            # в разных шкалах, и перепутать их — вопрос времени
+            raw = batch.get("area")
+            if raw is None:
+                raw = batch["mask"].flatten(1).mean(dim=1, keepdim=True)
+            target = normalize_area(raw.to(logits.device, dtype=logits.dtype))
+        else:
+            target = batch.get(f"aux_{name}")
+            if target is None:
+                return None
+            target = target.to(logits.device, dtype=logits.dtype)
+
+        prediction = prediction.reshape(target.shape)
+        if spec.loss == "bce":
+            per_sample = F.binary_cross_entropy_with_logits(
+                prediction, target, reduction="none"
+            ).mean(dim=1)
+        else:
+            per_sample = F.mse_loss(prediction, target, reduction="none").mean(dim=1)
+
+        if not spec.positives_only:
+            return per_sample.mean()
+
+        # у чистого кадра геометрии нет: ни центра, ни компонент. Учить на них
+        # нейтральную заглушку значило бы заставлять модель предсказывать
+        # «середина кадра» там, где маски вообще не существует
+        valid = batch.get("geom_valid")
+        if valid is None:
+            valid = batch["label"]
+        valid = valid.to(logits.device, dtype=logits.dtype).reshape(-1)
+        return (per_sample * valid).sum() / valid.sum().clamp(min=1.0)
+
+
+def build_loss(cfg_loss: dict, aux_weights: dict[str, float] | None = None) -> CombinedLoss:
+    return CombinedLoss(cfg_loss, aux_weights)

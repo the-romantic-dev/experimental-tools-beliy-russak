@@ -28,6 +28,7 @@ import torch.nn.functional as F
 
 from ..registry import BACKENDS, register_backend
 from ..streams import GatedDualEncoder, InputFusion, NoiseBranch, encoder_strides
+from .aux_heads import AUX_HEADS, build_aux_heads, parse_aux_spec
 
 
 def _stream_kinds(name: str) -> tuple[str, ...]:
@@ -58,6 +59,22 @@ class LogitsClsHead(nn.Module):
         return self.fc(features)
 
 
+class _FeatureCatcher:
+    """Складывает выход энкодера, чтобы его достали aux-головы.
+
+    Намеренно НЕ метод SegModel: `ModelEma` копирует модель через `deepcopy`,
+    и хук, замкнутый на связанный метод, утащил бы за собой всю модель. Обычный
+    объект копируется вместе с ссылкой на себя же в хуке, и копия остаётся
+    согласованной.
+    """
+
+    def __init__(self) -> None:
+        self.features = None
+
+    def __call__(self, module, inputs, output):
+        self.features = output
+
+
 class SegModel(nn.Module):
     """Общая обёртка: приводит любой бэкенд к единому контракту выхода."""
 
@@ -67,6 +84,8 @@ class SegModel(nn.Module):
         backend: str,
         cls_head: str = "aux",
         fusion: nn.Module | None = None,
+        aux_weights: dict[str, float] | None = None,
+        aux_dropout: float = 0.2,
     ) -> None:
         super().__init__()
         self.core = core
@@ -76,6 +95,17 @@ class SegModel(nn.Module):
         # при fuse=input остаток приклеивается к RGB здесь, а core уже собран
         # под расширенное число входных каналов
         self.fusion = fusion
+
+        self.aux_weights = dict(aux_weights or {})
+        self.aux_heads = None
+        self.catcher = None
+        if self.aux_weights:
+            if backend != "smp":
+                raise ValueError("aux-головы поддержаны только для backend=smp")
+            channels = int(core.encoder.out_channels[-1])
+            self.aux_heads = build_aux_heads(channels, self.aux_weights, aux_dropout)
+            self.catcher = _FeatureCatcher()
+            core.encoder.register_forward_hook(self.catcher)
 
     def forward(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         size = images.shape[-2:]
@@ -102,7 +132,19 @@ class SegModel(nn.Module):
 
         if cls_logits.ndim == 1:
             cls_logits = cls_logits.unsqueeze(1)
-        return {"logits": logits, "cls_logits": cls_logits}
+
+        outputs = {"logits": logits, "cls_logits": cls_logits}
+
+        if self.aux_heads is not None:
+            features = self.catcher.features
+            if features is None:
+                raise RuntimeError("энкодер не отдал признаки — хук aux-голов не сработал")
+            deepest = features[-1] if isinstance(features, (list, tuple)) else features
+            for name, head in self.aux_heads.items():
+                outputs[f"aux_{name}"] = head(deepest)
+            self.catcher.features = None  # не держим карту признаков после шага
+
+        return outputs
 
 
 def find_stem_conv(encoder: nn.Module, in_channels: int) -> nn.Conv2d | None:
@@ -189,6 +231,10 @@ def _build_smp(cfg: dict) -> tuple[nn.Module, str, nn.Module | None]:
         in_channels=fusion.out_channels if fusion is not None else 3,
         classes=1,
     )
+    # Проброс параметров конструктора энкодера. Нужен, например, Swin: у него
+    # размер входа зашит в предвычисленные маски внимания, и без img_size он
+    # падает на 768 с `Input height (768) doesn't match model (224)`.
+    kwargs.update(dict(cfg.get("encoder_kwargs") or {}))
     if aux_params is None:
         core = smp.create_model(**kwargs)
     else:
@@ -241,13 +287,20 @@ def _build_hf(cfg: dict) -> tuple[nn.Module, str]:
 @register_backend("smp")
 def _backend_smp(cfg_model: dict) -> SegModel:
     core, cls_head, fusion = _build_smp(cfg_model)
-    return SegModel(core, "smp", cls_head, fusion)
+    return SegModel(
+        core, "smp", cls_head, fusion,
+        aux_weights=parse_aux_spec(cfg_model.get("aux_heads")),
+        aux_dropout=float(cfg_model.get("cls_dropout", 0.2)),
+    )
 
 
 @register_backend("hf")
 def _backend_hf(cfg_model: dict) -> SegModel:
     core, cls_head = _build_hf(cfg_model)
-    return SegModel(core, "hf", cls_head, None)
+    return SegModel(
+        core, "hf", cls_head, None,
+        aux_weights=parse_aux_spec(cfg_model.get("aux_heads")),
+    )
 
 
 def build_model(cfg_model: dict) -> nn.Module:

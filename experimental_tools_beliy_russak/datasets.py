@@ -34,6 +34,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, RandomSampler, WeightedRandomSampler
 
+from .geometry import mask_geometry
 from .imageio import imread
 from .workspace import resolve
 from .precache import cached_path
@@ -96,12 +97,17 @@ class SegDataset(Dataset):
         extra_negatives: float = 0.0,
         seed: int = 0,
         pad_mode: bool = False,
+        aux_targets: bool = False,
     ) -> None:
         self.transform = transform
         self.source = source
         self.cache_size = cache_size
         self.gt_binarize = gt_binarize
         self.pad_mode = pad_mode
+        # геометрия считается только когда её кто-то просит: connectedComponents
+        # на маске 768x768 стоит ~1.5 мс, и платить их зря на каждом сэмпле
+        # незачем
+        self.aux_targets = aux_targets
         self.df = df.reset_index(drop=True)
 
         areas = (
@@ -163,11 +169,18 @@ class SegDataset(Dataset):
         # до трети холста и иначе systematically занижал бы долю маски
         area = float(mask_t[..., :valid_h, :valid_w].mean())
 
+        geometry = mask_geometry(mask_t, valid_h, valid_w) if self.aux_targets else {}
+
         return {
             "image": image_t,
             "mask": mask_t,
             "label": torch.tensor([float(mask_t.max() > 0)], dtype=torch.float32),
             "area": torch.tensor([area], dtype=torch.float32),
+            # площадь уже лежит выше в сыром виде — дублировать её под aux_
+            # не надо, цель для головы считается из неё нормировкой в лоссе
+            **{f"aux_{k}": v for k, v in geometry.items()
+               if k not in {"geom_valid", "area"}},
+            **({"geom_valid": geometry["geom_valid"]} if geometry else {}),
             "index": record.row_index,
             "orig_h": h,
             "orig_w": w,

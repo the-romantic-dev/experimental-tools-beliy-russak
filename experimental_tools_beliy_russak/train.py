@@ -29,6 +29,7 @@ from .logging_utils import RunLogger
 from .losses import build_loss
 from .metrics import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID
 from .models import build_model, count_parameters
+from .models.aux_heads import parse_aux_spec
 from .splits import load_folds
 from .transforms import build_transform
 from .utils import ModelEma, gpu_memory_gb, make_run_dir, pick_device, seed_everything
@@ -116,10 +117,13 @@ def build_dataloaders(cfg: Cfg, logger: RunLogger) -> tuple[DataLoader, DataLoad
         keep_negatives=bool(cfg.data.get("val_keep_negatives", True)),
     )
 
+    # геометрию считаем, только если её реально просит хоть одна aux-голова
+    aux_targets = bool(parse_aux_spec(cfg.model.get("aux_heads")))
     common = dict(
         source=cfg.data.get("source", "raw"),
         cache_size=int(cfg.data.get("cache_size", 768)),
         gt_binarize=cfg.data.get("gt_binarize", 0.5),
+        aux_targets=aux_targets,
     )
     train_ds = SegDataset(
         train_df, build_transform(cfg.data, train=True, seed=seed),
@@ -178,7 +182,7 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
     model = build_model(cfg.model).to(device, memory_format=torch.channels_last)
     logger.info(f"модель: {cfg.model.get('arch')}/{cfg.model.get('encoder')} {count_parameters(model)}")
 
-    criterion = build_loss(cfg.loss).to(device)
+    criterion = build_loss(cfg.loss, parse_aux_spec(cfg.model.get("aux_heads"))).to(device)
     optimizer = build_optimizer(model, cfg.train)
     scheduler = build_scheduler(optimizer, cfg.train, len(train_loader))
     amp = str(cfg.train.get("amp", "fp16"))
