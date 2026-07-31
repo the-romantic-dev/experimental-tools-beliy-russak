@@ -1,0 +1,23 @@
+# Быстрый цикл для проверки гипотез: маленький вход, кэш, треть данных.
+# Эпоха в разы короче baseline — годится, чтобы отсеивать идеи, но абсолютные
+# цифры сравнивай только с другими прогонами этого же конфига.
+#
+#   python cli.py train -c fast_cache_384 -s loss.seg.tversky=1.0 -s loss.seg.dice=0.0
+
+_base_: _base.yaml
+
+name: fast-384
+
+data:
+  size: 384
+  source: cache
+  cache_size: 768
+  train_frac: 0.33
+  aug: light
+
+train:
+  bs: 16
+  val_bs: 24
+  accum_steps: 1
+  epochs: 6
+  early_stop: 2

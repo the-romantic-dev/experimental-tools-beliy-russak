@@ -1,0 +1,27 @@
+# Более сильный декодер и больший вход. Тяжелее по памяти: батч меньше,
+# накопление градиента больше, чтобы эффективный батч остался прежним.
+#
+#   python cli.py train -c upernet_convnext_640
+
+_base_: _base.yaml
+
+name: upernet-convnext-640
+
+data:
+  size: 640
+  # raw, а не cache: на 640 px с convnext_small узкое место — GPU, а не декод,
+  # кэш здесь ничего не ускорит (замеры в GUIDE.md, раздел «Ресайз-кэш»)
+  source: raw
+
+model:
+  arch: upernet
+  encoder: tu-convnext_small
+  cls_head: from_logits   # у UPerNet в smp нет своей aux-головы
+
+train:
+  bs: 4
+  val_bs: 6
+  accum_steps: 4
+  epochs: 10
+  lr: 2.0e-4
+  encoder_lr: 6.0e-5

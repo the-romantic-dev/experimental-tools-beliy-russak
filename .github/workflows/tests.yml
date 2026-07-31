@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # torch в зависимости пакета не входит намеренно (см. pyproject.toml),
+      # поэтому ставится отдельно — и CPU-сборкой: тянуть на раннер
+      # CUDA-колесо на пару гигабайт незачем, тесты всё равно идут на CPU
+      - name: torch (CPU)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: пакет и зависимости
+        run: pip install -e ".[dev]"
+
+      # Датасет не нужен: ни один тест не читает data/ и artifacts/.
+      # Единственный тест, которому нужны предобученные веса, сам себя
+      # пропускает, если их не удалось скачать.
+      - name: тесты
+        run: pytest tests -q

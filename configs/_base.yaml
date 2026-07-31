@@ -1,0 +1,101 @@
+# Базовый конфиг. Остальные наследуются от него через `_base_: _base.yaml`
+# и переопределяют только то, что реально меняют.
+#
+# Любой ключ переопределяется из командной строки:
+#   python cli.py train -c baseline -s train.lr=1e-4 -s data.size=640
+
+name: null           # имя папки в runs/; null -> arch + хэш конфига
+seed: 42
+device: auto         # auto | cuda | cpu
+tensorboard: true
+
+data:
+  source: raw        # raw = оригиналы с диска, cache = ресайз-кэш (быстрее)
+  cache_size: 768    # какой кэш брать при source=cache
+  size: 512          # сторона входа модели
+  aug: medium        # none | light | medium | heavy
+  crop_scale: [0.35, 1.0]
+  val_mode: resize   # resize | pad
+  gt_binarize: 0.5   # маски мягкие; null оставит их soft-таргетами
+
+  # Негативов в данных ~3%, а они дают половину метрики через FPR_neg.
+  negative_fraction: 0.25   # доля негативов в батче (null = не перевзвешивать)
+  extra_negatives: 0.15     # добор чистых оригиналов из src, доля от train
+
+  # Перекос внутри позитивов: кадры с маской мельче small_area_threshold — это
+  # 22% позитивов, но почти весь недобор Dice (на масках <1% кадра модель
+  # промахивает 71% случаев). null = не перевзвешивать, естественная доля.
+  small_area_fraction: null
+  small_area_threshold: 0.06
+  # прореживать подвыборкой валидации только позитивы: негативов мало, и на
+  # них считается FPR_neg, то есть половина метрики
+  val_keep_negatives: true
+  # длина эпохи в сэмплах. НЕ урезает данные: сэмплирование идёт с возвращением
+  # по всему train, просто эпоха короче. Управляет бюджетом прогона и тем,
+  # как часто считается валидация. null = эпоха равна размеру train
+  epoch_size: null
+
+  # подвыборки для отладки
+  train_frac: null
+  val_frac: null
+  train_limit: null
+  val_limit: null
+
+model:
+  backend: smp                 # smp | hf
+  arch: unet                   # unet|unetplusplus|fpn|manet|deeplabv3plus|upernet|segformer|pan
+  encoder: tu-convnext_tiny    # префикс tu- = энкодер из timm
+  encoder_weights: imagenet    # imagenet | null (скачивается при первом запуске)
+  cls_head: aux                # aux | from_logits | none
+  cls_dropout: 0.2
+
+  # Низкоуровневый (forensic) поток: SRM/Bayar-остаток вторым входом.
+  stream: none                 # none | srm | bayar | srm_bayar
+  fuse: input                  # input = склейка по каналам; gate = отдельная
+                               # ветка + обучаемый гейт в пирамиду энкодера
+  stream_width: 32             # базовая ширина ветки при fuse=gate
+
+loss:
+  seg:
+    bce: 1.0
+    dice: 1.0
+    focal: 0.0
+    tversky: 0.0
+  cls_weight: 0.3    # вес aux-классификации; она и давит FPR_neg
+  dice_smooth: 1.0
+  pos_weight: null
+  tversky: {alpha: 0.3, beta: 0.7}
+  focal: {alpha: 0.25, gamma: 2.0}
+
+  # Отдельный состав лосса для мелких масок. Пустой small_seg и small_weight 1.0
+  # = режим выключен, лосс считается ровно как раньше.
+  area:
+    threshold: 0.06     # ниже этой доли кадра маска считается мелкой
+    small_seg: {}       # напр. {bce: 0.5, focal: 1.0, tversky: 1.5}
+    small_weight: 1.0   # множитель вклада мелких кадров в лосс
+
+train:
+  fold: 0
+  epochs: 12
+  bs: 8              # 512px + convnext_tiny на 8 ГБ влезает с fp16
+  val_bs: 12
+  accum_steps: 2     # эффективный батч 16
+  lr: 3.0e-4
+  encoder_lr: 1.0e-4 # предобученному энкодеру нужен lr поменьше
+  weight_decay: 1.0e-4
+  optimizer: adamw   # adamw | sgd
+  scheduler: cosine  # cosine | onecycle | none
+  warmup_frac: 0.05
+  min_lr_factor: 0.02
+  amp: fp16          # fp16 | bf16 | off
+  grad_clip: 1.0
+  ema: true
+  ema_decay: 0.999
+  num_workers: 6
+  log_every: 100
+  early_stop: 4      # эпох без роста AIC до остановки; 0 = не останавливать
+  max_train_steps: null
+  max_val_steps: null
+
+calib:
+  n_bins: 256        # разрешение сетки порогов в накопленной статистике

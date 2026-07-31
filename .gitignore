@@ -1,0 +1,29 @@
+# Данные и результаты: тяжёлые и у каждого свои.
+data/
+artifacts/
+runs/
+preds/
+submissions/
+
+# Архивы. Тут лежит «вайбик + кодик.zip» на 23 МБ — в git ему делать нечего.
+*.zip
+
+# Личные компоненты воркспейса; образец лежит в docs/aic_plugins.example.py
+aic_plugins.py
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Редакторы и ОС
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,21 @@
+# Трансформерный вариант — другой класс ошибок, хорошо заходит в ансамбль
+# с свёрточным baseline.
+#
+#   python cli.py train -c segformer_mit_b2
+
+_base_: _base.yaml
+
+name: segformer-mitb2-512
+
+model:
+  backend: smp
+  arch: segformer
+  # MiT — нативный энкодер smp, в timm его нет, поэтому БЕЗ префикса tu-
+  encoder: mit_b2
+  cls_head: aux
+
+train:
+  bs: 6
+  accum_steps: 3
+  lr: 2.0e-4
+  encoder_lr: 6.0e-5

@@ -1,0 +1,10 @@
+# Список зависимостей живёт в pyproject.toml — здесь только способ его поставить.
+#
+#   D:/Apps/anaconda3/envs/challenges/python.exe -m pip install -r requirements.txt
+#
+# Ставится поверх уже существующей conda-среды `challenges` (torch 2.11+cu126,
+# numpy, pandas, sklearn, PIL там уже есть). torch в зависимости пакета
+# намеренно не включён, чтобы pip не пытался подменить conda-сборку колесом
+# с PyPI — с другой версией CUDA.
+
+-e .[dev]

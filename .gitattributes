@@ -1,0 +1,16 @@
+# Переводы строк не должны зависеть от того, кто клонировал репозиторий.
+* text=auto eol=lf
+
+# cmd.exe не разбирает bat-файлы с одними LF, а PowerShell на Windows ждёт CRLF.
+# Без этих строк файл, склонированный на Linux или Mac, ломается при переносе.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Бинарники — не трогать вообще
+*.png binary
+*.jpg binary
+*.npz binary
+*.parquet binary
+*.pt binary
+*.zip binary

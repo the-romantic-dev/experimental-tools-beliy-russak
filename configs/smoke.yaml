@@ -1,0 +1,33 @@
+# Проверка «пайплайн жив»: ~1 минута, крошечная подвыборка, без скачивания весов.
+#   python cli.py smoke
+# Чтобы заодно проверить загрузку предобученных весов:
+#   python cli.py smoke -s model.encoder_weights=imagenet
+
+_base_: _base.yaml
+
+name: smoke
+
+data:
+  size: 256
+  aug: light
+  train_limit: 200
+  val_limit: 120
+  negative_fraction: 0.3
+  extra_negatives: 0.2
+
+model:
+  encoder: tu-resnet18
+  encoder_weights: null
+
+train:
+  epochs: 1
+  bs: 4
+  val_bs: 8
+  accum_steps: 1
+  num_workers: 2
+  log_every: 10
+  ema: true
+  early_stop: 0
+
+calib:
+  n_bins: 128

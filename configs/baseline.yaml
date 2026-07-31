@@ -1,0 +1,8 @@
+# Стартовая точка: Unet + ConvNeXt-Tiny, 512px, fold 0.
+# С этого имеет смысл начинать и относительно этого сравнивать всё остальное.
+#
+#   python cli.py train -c baseline
+
+_base_: _base.yaml
+
+name: baseline-unet-convnext-512
