@@ -43,7 +43,7 @@ aic train -c baseline
 Только библиотека, без клона репозитория:
 
 ```bash
-pip install git+https://github.com/ЗАМЕНИ-МЕНЯ/experimental-tools-beliy-russak.git
+pip install git+https://github.com/the-romantic-dev/experimental-tools-beliy-russak.git
 ```
 
 Так приезжает код и команда `aic`. Конфиги и планы в колесо **не входят** — это

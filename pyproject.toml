@@ -56,7 +56,7 @@ dev = [
 [project.urls]
 # ЗАМЕНИ НА СВОЙ АДРЕС ПОСЛЕ СОЗДАНИЯ РЕПОЗИТОРИЯ — это единственное место,
 # где он нужен; без него на странице пакета не будет ссылки обратно на исходники
-Repository = "https://github.com/ЗАМЕНИ-МЕНЯ/experimental-tools-beliy-russak"
+Repository = "https://github.com/the-romantic-dev/experimental-tools-beliy-russak"
 
 [project.scripts]
 aic = "experimental_tools_beliy_russak.cli:app"
