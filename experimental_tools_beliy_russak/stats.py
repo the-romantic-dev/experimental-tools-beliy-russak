@@ -475,3 +475,44 @@ def compare_to_reference(
         train_sigma=train_sigma,
         warning=warning,
     )
+
+
+GATE_ACTIONS = ("warn", "stop")
+
+
+@dataclass(frozen=True)
+class StatsSettings:
+    reference: str
+    train_sigma: float | None
+    bootstrap_n: int
+    bootstrap_seed: int
+    gate_delta: float
+    gate_after_samples: int
+    gate_action: str
+
+
+def stats_settings(cfg) -> StatsSettings | None:
+    """Разобрать блок `stats`. None означает «машинерия выключена»."""
+    reference = _get_path(cfg, "stats.reference")
+    if not reference:
+        return None
+
+    action = str(_get_path(cfg, "stats.gate_action") or "warn")
+    if action not in GATE_ACTIONS:
+        raise ValueError(f"stats.gate_action={action!r}, допустимо: {GATE_ACTIONS}")
+
+    train_sigma = _get_path(cfg, "stats.train_sigma")
+    bootstrap_n = _get_path(cfg, "stats.bootstrap_n")
+    bootstrap_seed = _get_path(cfg, "stats.bootstrap_seed")
+    gate_delta = _get_path(cfg, "stats.gate_delta")
+    after = _get_path(cfg, "stats.gate_after_samples")
+
+    return StatsSettings(
+        reference=str(reference),
+        train_sigma=None if train_sigma is None else float(train_sigma),
+        bootstrap_n=2000 if bootstrap_n is None else int(bootstrap_n),
+        bootstrap_seed=0 if bootstrap_seed is None else int(bootstrap_seed),
+        gate_delta=-0.05 if gate_delta is None else float(gate_delta),
+        gate_after_samples=24000 if after is None else int(after),
+        gate_action=action,
+    )

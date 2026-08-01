@@ -133,6 +133,16 @@ SCHEMA: dict[str, Any] = {
         "cls_grid": LEAF,
         "area_grid": LEAF,
     },
+
+    "stats": {
+        "reference": LEAF,
+        "train_sigma": LEAF,
+        "bootstrap_n": LEAF,
+        "bootstrap_seed": LEAF,
+        "gate_delta": LEAF,
+        "gate_after_samples": LEAF,
+        "gate_action": LEAF,
+    },
 }
 
 

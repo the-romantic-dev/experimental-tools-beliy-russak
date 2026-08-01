@@ -15,7 +15,9 @@ import pandas as pd
 import pytest
 import yaml
 
+from experimental_tools_beliy_russak.config import load_config
 from experimental_tools_beliy_russak.metrics import AICAccumulator, harmonic_aic
+from experimental_tools_beliy_russak.schema import find_unknown_keys
 from experimental_tools_beliy_russak.stats import (
     Boot,
     PerImage,
@@ -28,6 +30,7 @@ from experimental_tools_beliy_russak.stats import (
     paired_bootstrap,
     per_image,
     seeds_needed,
+    stats_settings,
     verdict,
 )
 
@@ -339,3 +342,38 @@ def test_compare_refuses_when_budgets_diverged(tmp_path):
     assert "data.epoch_size" in got.verdict.reason
     # report печатает метку в верхнем регистре
     assert any("НЕСОПОСТАВИМО" in line for line in got.report("эталон"))
+
+
+def test_stats_block_is_known_to_the_schema():
+    """Иначе проверка опечаток заругается на весь новый блок."""
+    cfg = {"stats": {
+        "reference": "f0-control-768", "train_sigma": 0.008,
+        "bootstrap_n": 2000, "bootstrap_seed": 0,
+        "gate_delta": -0.05, "gate_after_samples": 24000, "gate_action": "warn",
+    }}
+    assert find_unknown_keys(cfg) == []
+
+
+def test_base_config_keeps_stats_switched_off():
+    cfg = load_config("_base")
+    assert cfg.get_path("stats.reference") is None
+    assert stats_settings(cfg) is None
+
+
+def test_stats_settings_reads_the_block():
+    cfg = {"stats": {"reference": "f0-control-768", "train_sigma": 0.008,
+                     "gate_action": "stop", "gate_after_samples": 12000}}
+    got = stats_settings(cfg)
+
+    assert got.reference == "f0-control-768"
+    assert got.train_sigma == 0.008
+    assert got.gate_action == "stop"
+    assert got.gate_after_samples == 12000
+    assert got.bootstrap_n == 2000        # значение по умолчанию
+    assert got.gate_delta == -0.05        # значение по умолчанию
+
+
+def test_stats_settings_rejects_unknown_gate_action():
+    cfg = {"stats": {"reference": "f0-control-768", "gate_action": "убить"}}
+    with pytest.raises(ValueError, match="gate_action"):
+        stats_settings(cfg)
