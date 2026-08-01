@@ -16,8 +16,11 @@ from experimental_tools_beliy_russak.stats import (
     Boot,
     PerImage,
     align_by_stem,
+    comparable,
     paired_bootstrap,
     per_image,
+    seeds_needed,
+    verdict,
 )
 
 
@@ -136,3 +139,64 @@ def test_bootstrap_rejects_mismatched_sets():
     b, _ = synthetic_pair(rng, 90, 20, gain=0.0)
     with pytest.raises(ValueError, match="align_by_stem"):
         paired_bootstrap(a, b, n=50, seed=0)
+
+
+def make_boot(delta: float, half_width: float = 0.003) -> Boot:
+    return Boot(delta=delta, lo=delta - half_width, hi=delta + half_width, sd=half_width / 2)
+
+
+def test_seeds_needed_matches_the_documented_formula():
+    # k = ceil(8 * sigma^2 / delta^2); значения из спеки
+    assert seeds_needed(0.005, 0.008) == 21
+    assert seeds_needed(0.0068, 0.008) == 12
+    assert seeds_needed(0.012, 0.008) == 4
+    assert seeds_needed(0.0, 0.008) is None
+
+
+def test_small_gain_is_called_noise_and_priced_in_seeds():
+    got = verdict(0.005, make_boot(0.005), train_sigma=0.008)
+    assert got.label == "внутри шума обучения"
+    assert got.seeds_needed == 21
+
+
+def test_large_gain_with_clean_interval_is_confirmed():
+    got = verdict(0.05, make_boot(0.05), train_sigma=0.008)
+    assert got.label == "подтверждено"
+    assert got.seeds_needed is None
+
+
+def test_large_gain_with_interval_over_zero_is_not_confirmed():
+    """Порог по шуму обучения пройден, но выборка val сама по себе неубедительна."""
+    got = verdict(0.05, make_boot(0.05, half_width=0.08), train_sigma=0.008)
+    assert got.label == "внутри шума обучения"
+    assert "CI" in got.reason
+
+
+def test_large_loss_is_called_worse():
+    got = verdict(-0.05, make_boot(-0.05), train_sigma=0.008)
+    assert got.label == "хуже"
+
+
+def test_missing_train_sigma_does_not_pretend_to_know():
+    got = verdict(0.05, make_boot(0.05), train_sigma=None)
+    assert got.label == "пол шума не задан"
+
+
+def test_diverged_configs_block_the_verdict():
+    got = verdict(0.05, make_boot(0.05), train_sigma=0.008, diverged=["data.epoch_size"])
+    assert got.label == "несопоставимо"
+    assert "data.epoch_size" in got.reason
+
+
+def test_comparable_finds_the_key_that_diverged():
+    base = {"data": {"size": 768, "epoch_size": 8000, "val_frac": 0.25, "val_seed": 42},
+            "train": {"epochs": 6, "bs": 4, "accum_steps": 4, "fold": 0}}
+    other = {"data": {"size": 768, "epoch_size": 4000, "val_frac": 0.25, "val_seed": 42},
+             "train": {"epochs": 12, "bs": 4, "accum_steps": 4, "fold": 0}}
+
+    ok, diverged = comparable(base, base)
+    assert ok and diverged == []
+
+    ok, diverged = comparable(base, other)
+    assert not ok
+    assert diverged == ["data.epoch_size", "train.epochs"]

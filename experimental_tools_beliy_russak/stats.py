@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -143,4 +144,98 @@ def paired_bootstrap(
         lo=float(np.percentile(diffs, 2.5)),
         hi=float(np.percentile(diffs, 97.5)),
         sd=float(diffs.std(ddof=1)) if n > 1 else 0.0,
+    )
+
+
+#: ключи, определяющие бюджет прогона. Сравнивать между собой можно только
+#: прогоны, у которых они совпадают: иначе разница мерит бюджет, а не гипотезу
+BUDGET_KEYS = (
+    "data.size",
+    "data.epoch_size",
+    "data.val_frac",
+    "data.val_seed",
+    "train.epochs",
+    "train.bs",
+    "train.accum_steps",
+    "train.fold",
+)
+
+
+def _get_path(node, dotted: str):
+    """Значение по пути `a.b.c`; отсутствующий ключ — None."""
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def comparable(cfg: dict, cfg_ref: dict, keys=BUDGET_KEYS) -> tuple[bool, list[str]]:
+    """Совпадают ли бюджеты двух прогонов; вторым — список разошедшихся ключей."""
+    diverged = [key for key in keys if _get_path(cfg, key) != _get_path(cfg_ref, key)]
+    return not diverged, diverged
+
+
+def seeds_needed(delta: float, train_sigma: float) -> int | None:
+    """Сколько сидов на плечо нужно, чтобы эффект размера `delta` стал 2-сигмовым.
+
+    sigma разницы при k сидах на плечо равна `train_sigma * sqrt(2 / k)`; условие
+    `|delta| >= 2 * sigma_разницы` даёт `k >= 8 * train_sigma^2 / delta^2`.
+
+    Это и есть главный выход всей затеи: «внутри шума» превращается в «проверка
+    стоила бы столько-то прогонов».
+    """
+    if abs(delta) < 1e-12:
+        return None
+    return max(1, math.ceil(8.0 * train_sigma ** 2 / delta ** 2))
+
+
+@dataclass(frozen=True)
+class Verdict:
+    label: str
+    reason: str
+    seeds_needed: int | None
+
+
+def verdict(
+    delta: float,
+    boot: Boot,
+    train_sigma: float | None,
+    *,
+    diverged: tuple[str, ...] | list[str] = (),
+) -> Verdict:
+    """Вердикт по завершённому прогону.
+
+    Асимметрия намеренная: заявка на выигрыш требует и превышения пола шума
+    обучения, и чистого интервала по выборке val, а сигнал о провале — только
+    первого. Ошибиться, объявив победу, дороже.
+    """
+    if diverged:
+        return Verdict("несопоставимо", "разошлись ключи: " + ", ".join(diverged), None)
+    if train_sigma is None:
+        return Verdict(
+            "пол шума не задан",
+            "stats.train_sigma не заполнен — вердикт вынести не по чему",
+            None,
+        )
+
+    floor = 2.0 * train_sigma * math.sqrt(2.0)
+    if delta <= -floor:
+        return Verdict("хуже", f"|Δ| >= {floor:.4f} = 2*train_sigma*sqrt(2)", None)
+    if delta >= floor:
+        if boot.lo > 0.0:
+            return Verdict(
+                "подтверждено",
+                f"Δ >= {floor:.4f} и 95% CI по выборке val не накрывает ноль",
+                None,
+            )
+        return Verdict(
+            "внутри шума обучения",
+            f"Δ >= {floor:.4f}, но 95% CI по выборке val накрывает ноль",
+            seeds_needed(delta, train_sigma),
+        )
+    return Verdict(
+        "внутри шума обучения",
+        f"|Δ| < {floor:.4f} = 2*train_sigma*sqrt(2)",
+        seeds_needed(delta, train_sigma),
     )
