@@ -8,16 +8,23 @@ from __future__ import annotations
 
 import experimental_tools_beliy_russak  # noqa: F401
 
+import json
+
 import numpy as np
+import pandas as pd
 import pytest
+import yaml
 
 from experimental_tools_beliy_russak.metrics import AICAccumulator, harmonic_aic
 from experimental_tools_beliy_russak.stats import (
     Boot,
     PerImage,
+    Reference,
     align_by_stem,
     comparable,
+    compare_to_reference,
     gate_check,
+    load_reference,
     paired_bootstrap,
     per_image,
     seeds_needed,
@@ -244,3 +251,91 @@ def test_gate_refuses_to_judge_outside_the_reference_curve():
     assert not got.fired
     assert got.delta is None
     assert "кривой эталона" in got.reason
+
+
+def write_run(root, name: str, accumulator, stems, cfg: dict, aics: list[float]):
+    """Минимальная папка прогона: столько, сколько читает load_reference."""
+    run_dir = root / name
+    (run_dir / "oof").mkdir(parents=True)
+    accumulator.save(run_dir / "oof" / "val.npz")
+    pd.DataFrame({"stem": stems}).to_parquet(run_dir / "oof" / "val_rows.parquet", index=False)
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
+    (run_dir / "metrics.jsonl").write_text(
+        "\n".join(json.dumps({"step": i, "val/aic_tuned": a}) for i, a in enumerate(aics)),
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+def base_cfg(epoch_size: int = 4) -> dict:
+    return {
+        "data": {"size": 768, "epoch_size": epoch_size, "val_frac": 0.25, "val_seed": 42},
+        "train": {"epochs": 3, "bs": 4, "accum_steps": 4, "fold": 0},
+    }
+
+
+def test_load_reference_reads_curve_in_samples(tmp_path):
+    accumulator = make_accumulator(seed=5)
+    stems = [f"кадр{i}" for i in range(len(accumulator))]
+    run_dir = write_run(tmp_path, "эталон", accumulator, stems, base_cfg(), [0.30, 0.50, 0.65])
+
+    reference = load_reference(run_dir)
+
+    assert isinstance(reference, Reference)
+    assert reference.name == "эталон"
+    assert list(reference.curve[0]) == [4, 8, 12]     # (step + 1) * epoch_size
+    assert list(reference.curve[1]) == [0.30, 0.50, 0.65]
+    assert list(reference.stems) == stems
+    assert len(reference.op) == 3
+
+
+def test_compare_to_reference_on_identical_runs_gives_zero(tmp_path):
+    accumulator = make_accumulator(seed=6)
+    stems = [f"кадр{i}" for i in range(len(accumulator))]
+    run_dir = write_run(tmp_path, "эталон", accumulator, stems, base_cfg(), [0.3, 0.5, 0.65])
+    reference = load_reference(run_dir)
+
+    got = compare_to_reference(
+        accumulator, stems, base_cfg(), reference,
+        own_op=reference.op, train_sigma=0.008, bootstrap_n=100, bootstrap_seed=0,
+    )
+
+    assert got.delta_ref_op == pytest.approx(0.0, abs=1e-12)
+    assert got.delta_own_op == pytest.approx(0.0, abs=1e-12)
+    assert got.verdict.label == "внутри шума обучения"
+    assert got.n_common == len(accumulator)
+    assert got.warning is None
+
+
+def test_compare_warns_when_val_sets_only_partly_overlap(tmp_path):
+    """Случай f1-seed7: у эталона другая подвыборка позитивов."""
+    accumulator = make_accumulator(seed=8)
+    stems = [f"кадр{i}" for i in range(len(accumulator))]
+    shifted = [f"кадр{i + 4}" for i in range(len(accumulator))]
+    run_dir = write_run(tmp_path, "эталон", accumulator, shifted, base_cfg(), [0.3, 0.5, 0.65])
+    reference = load_reference(run_dir)
+
+    got = compare_to_reference(
+        accumulator, stems, base_cfg(), reference,
+        own_op=reference.op, train_sigma=0.008, bootstrap_n=100, bootstrap_seed=0,
+    )
+
+    assert got.n_common < len(accumulator)
+    assert "совпадает с текущим только" in got.warning
+
+
+def test_compare_refuses_when_budgets_diverged(tmp_path):
+    accumulator = make_accumulator(seed=9)
+    stems = [f"кадр{i}" for i in range(len(accumulator))]
+    run_dir = write_run(tmp_path, "эталон", accumulator, stems, base_cfg(), [0.3, 0.5, 0.65])
+    reference = load_reference(run_dir)
+
+    got = compare_to_reference(
+        accumulator, stems, base_cfg(epoch_size=8), reference,
+        own_op=reference.op, train_sigma=0.008, bootstrap_n=100, bootstrap_seed=0,
+    )
+
+    assert got.verdict.label == "несопоставимо"
+    assert "data.epoch_size" in got.verdict.reason
+    # report печатает метку в верхнем регистре
+    assert any("НЕСОПОСТАВИМО" in line for line in got.report("эталон"))

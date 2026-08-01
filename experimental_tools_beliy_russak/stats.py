@@ -11,12 +11,24 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
+import yaml
 
-from .metrics import EPS, FP_AREA_THRESHOLD, AICAccumulator, harmonic_aic
+from .metrics import (
+    DEFAULT_AREA_GRID,
+    DEFAULT_CLS_GRID,
+    DEFAULT_MASK_GRID,
+    EPS,
+    FP_AREA_THRESHOLD,
+    AICAccumulator,
+    harmonic_aic,
+)
 
 
 @dataclass(frozen=True)
@@ -285,3 +297,181 @@ def gate_check(
         else f"отставание {delta:+.4f} в пределах порога {gate_delta:+.4f}"
     )
     return Gate(ref_aic, delta, fired, reason)
+
+
+@dataclass(frozen=True)
+class Reference:
+    """Опорный прогон, поднятый с диска."""
+
+    name: str
+    accumulator: AICAccumulator
+    stems: np.ndarray
+    op: tuple[float, float, float]
+    cfg: dict
+    curve: tuple[np.ndarray, np.ndarray]
+
+
+def resolve_reference(name: str) -> Path:
+    """Имя прогона или путь к его папке."""
+    from .workspace import runs_root
+
+    candidate = Path(name)
+    return candidate if candidate.exists() else runs_root() / name
+
+
+def load_reference(run_dir) -> Reference:
+    """Единственная функция модуля, которая ходит на диск."""
+    run_dir = Path(run_dir)
+    accumulator = AICAccumulator.load(run_dir / "oof" / "val.npz")
+    stems = pd.read_parquet(run_dir / "oof" / "val_rows.parquet")["stem"].to_numpy()
+    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8")) or {}
+
+    # операционная точка эталона: из summary, иначе пересчитываем по сетке по умолчанию
+    summary_path = run_dir / "summary.json"
+    op = None
+    if summary_path.exists():
+        best = (json.loads(summary_path.read_text(encoding="utf-8")) or {}).get("best")
+        if best:
+            op = (
+                float(best["mask_threshold"]),
+                float(best["cls_threshold"]),
+                float(best["min_area"]),
+            )
+    if op is None:
+        best = accumulator.best(
+            list(DEFAULT_MASK_GRID), list(DEFAULT_CLS_GRID), list(DEFAULT_AREA_GRID)
+        )
+        op = (best.mask_threshold, best.cls_threshold, best.min_area)
+
+    epoch_size = int(_get_path(cfg, "data.epoch_size") or 0)
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rows = [r for r in rows if "val/aic_tuned" in r]
+    xs = np.array([(int(r["step"]) + 1) * epoch_size for r in rows], dtype=float)
+    ys = np.array([float(r["val/aic_tuned"]) for r in rows], dtype=float)
+
+    return Reference(run_dir.name, accumulator, stems, op, cfg, (xs, ys))
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """Финальное сравнение прогона с эталоном."""
+
+    delta_ref_op: float
+    delta_own_op: float
+    boot: Boot
+    verdict: Verdict
+    n_common: int
+    n_pos: int
+    n_neg: int
+    ref_op: tuple[float, float, float]
+    own_op: tuple[float, float, float]
+    train_sigma: float | None
+    warning: str | None
+
+    def as_dict(self) -> dict:
+        return {
+            "delta_ref_op": self.delta_ref_op,
+            "delta_own_op": self.delta_own_op,
+            "ci_lo": self.boot.lo,
+            "ci_hi": self.boot.hi,
+            "sigma_val": self.boot.sd,
+            "label": self.verdict.label,
+            "reason": self.verdict.reason,
+            "seeds_needed": self.verdict.seeds_needed,
+            "n_common": self.n_common,
+            "n_pos": self.n_pos,
+            "n_neg": self.n_neg,
+            "ref_op": list(self.ref_op),
+            "own_op": list(self.own_op),
+            "train_sigma": self.train_sigma,
+            "warning": self.warning,
+        }
+
+    def report(self, ref_name: str, hours_per_run: float = 1.35) -> list[str]:
+        """Строки для лога. Обе дельты печатаются всегда: их разрыв — накрутка
+        от подбора порогов под 639 негативов, и её надо видеть."""
+        lines = [f"вердикт против {ref_name}:"]
+        if self.warning:
+            lines.append(f"  ВНИМАНИЕ: {self.warning}")
+        thr, cls_thr, min_area = self.ref_op
+        lines.append(
+            f"  Δ AIC = {self.delta_ref_op:+.4f}  "
+            f"(в точке эталона thr={thr:.3f} cls={cls_thr:.3f} area={min_area:.3f})"
+        )
+        lines.append(
+            f"  95% CI по выборке val: [{self.boot.lo:+.4f}, {self.boot.hi:+.4f}]   "
+            f"sigma_val = {self.boot.sd:.4f}   кадров {self.n_pos} pos / {self.n_neg} neg"
+        )
+        if self.train_sigma is not None:
+            lines.append(
+                f"  пол шума обучения: train_sigma = {self.train_sigma:.4f} -> "
+                f"sigma разницы {self.train_sigma * math.sqrt(2.0):.4f}"
+            )
+        tail = ""
+        if self.verdict.seeds_needed:
+            runs = 2 * self.verdict.seeds_needed
+            tail = (
+                f": нужно {self.verdict.seeds_needed} сидов на плечо "
+                f"({runs} прогонов, ~{runs * hours_per_run:.0f} ч)"
+            )
+        lines.append(f"  {self.verdict.label.upper()}{tail}")
+        lines.append(f"  причина: {self.verdict.reason}")
+        lines.append(f"  справочно, в своей тюненой точке: {self.delta_own_op:+.4f}")
+        return lines
+
+
+def compare_to_reference(
+    accumulator: AICAccumulator,
+    stems,
+    cfg: dict,
+    reference: Reference,
+    *,
+    own_op: tuple[float, float, float],
+    train_sigma: float | None,
+    bootstrap_n: int,
+    bootstrap_seed: int,
+) -> Comparison:
+    """Собрать финальное сравнение: дельты, интервал, вердикт."""
+    stems = np.asarray(stems)
+    idx_self, idx_ref = align_by_stem(stems, reference.stems)
+
+    def cut(sample: PerImage, idx: np.ndarray) -> PerImage:
+        return PerImage(dice=sample.dice[idx], alarm=sample.alarm[idx], is_pos=sample.is_pos[idx])
+
+    ref_at_ref_op = cut(per_image(reference.accumulator, reference.op), idx_ref)
+    self_at_ref_op = cut(per_image(accumulator, reference.op), idx_self)
+    boot = paired_bootstrap(ref_at_ref_op, self_at_ref_op, n=bootstrap_n, seed=bootstrap_seed)
+
+    # справочная дельта: каждый прогон в СВОЕЙ тюненой точке. Разрыв с основной
+    # дельтой и есть накрутка от подбора порогов под 639 негативов
+    self_at_own_op = cut(per_image(accumulator, own_op), idx_self)
+    pos = ref_at_ref_op.is_pos
+    delta_own = harmonic_aic(
+        self_at_own_op.dice[pos].mean(), self_at_own_op.alarm[~pos].mean()
+    ) - harmonic_aic(ref_at_ref_op.dice[pos].mean(), ref_at_ref_op.alarm[~pos].mean())
+
+    warning = None
+    if idx_self.size < stems.size:
+        warning = (
+            f"val эталона совпадает с текущим только на {idx_self.size} из {stems.size} кадров. "
+            f"Дельта считается на пересечении, CI будет шире."
+        )
+
+    _, diverged = comparable(cfg, reference.cfg)
+    return Comparison(
+        delta_ref_op=boot.delta,
+        delta_own_op=float(delta_own),
+        boot=boot,
+        verdict=verdict(boot.delta, boot, train_sigma, diverged=diverged),
+        n_common=int(idx_self.size),
+        n_pos=int(pos.sum()),
+        n_neg=int((~pos).sum()),
+        ref_op=reference.op,
+        own_op=own_op,
+        train_sigma=train_sigma,
+        warning=warning,
+    )
