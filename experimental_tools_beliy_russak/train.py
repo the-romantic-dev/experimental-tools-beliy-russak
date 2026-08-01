@@ -287,9 +287,13 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
             "gpu_gb": round(gpu_memory_gb(), 2),
         }
         logger.log_metrics(epoch, metrics)
+        nan_note = (
+            f" | ПРОПУЩЕНО nan-шагов: {train_stats['nan_steps']}"
+            if train_stats.get("nan_steps") else ""
+        )
         logger.info(
             f"эпоха {epoch}: train_loss={train_stats['loss']:.4f} "
-            f"val_loss={val_stats['val_loss']:.4f} | {tuned}"
+            f"val_loss={val_stats['val_loss']:.4f} | {tuned}{nan_note}"
         )
 
         state = _checkpoint_state(

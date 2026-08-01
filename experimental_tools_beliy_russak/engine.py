@@ -72,7 +72,19 @@ def _histograms(
         n_pixels = np.full(batch, height * width, dtype=np.int64)
 
     flat = probs.reshape(batch, -1)
-    idx = (flat * n_bins).long().clamp_(max=n_bins - 1)
+    if not torch.isfinite(flat).all():
+        # без этой проверки nan уезжал в `.long()` (это INT64_MIN, а `clamp_`
+        # ниже держит только верхнюю границу) и вылезал через двести строк
+        # стека как «bincount only supports non-negative inputs» — сообщение,
+        # по которому настоящую причину не найти
+        raise RuntimeError(
+            "модель выдала не-конечные вероятности на валидации. Чаще всего это "
+            "значит, что в train переполнился forward: BatchNorm навсегда записал "
+            "inf/nan в running_mean/running_var, и в train-режиме лосс выглядит "
+            "здоровым (там BN считает по батчу), а eval берёт испорченные буферы. "
+            "Смотри nan-шаги в логе эпохи."
+        )
+    idx = (flat * n_bins).long().clamp_(min=0, max=n_bins - 1)
     offsets = torch.arange(batch, device=idx.device).unsqueeze(1) * n_bins
     shifted = (idx + offsets).reshape(-1)
 
@@ -88,6 +100,93 @@ def _histograms(
         gt_flat.sum(dim=1).cpu().numpy(),
         np.asarray(n_pixels, dtype=np.int64),
     )
+
+
+@torch.no_grad()
+def _nan_report(model: nn.Module, images: torch.Tensor, batch: dict, outputs: dict,
+                dtype: torch.dtype | None) -> str:
+    """Где именно родился nan: во входе, в цели, в выходе или в конкретном слое.
+
+    Вызывается только на аварийном шаге, поэтому может позволить себе второй
+    forward с хуками на каждом листовом модуле. Дешёвая проверка «весь ли
+    тензор конечен» на каждом слое КАЖДОГО шага стоила бы сотни синхронизаций
+    с GPU, а нужна она раз в несколько тысяч шагов.
+
+    Первый модуль в цепочке и есть виновник: дальше по сети inf сам собой
+    превращается в nan (например, любой BatchNorm даёт (inf-inf)/inf), и по
+    последнему звену причину не найти.
+    """
+    lines: list[str] = []
+
+    def flag(name: str, tensor) -> None:
+        if not isinstance(tensor, torch.Tensor) or not tensor.is_floating_point():
+            return
+        finite = torch.isfinite(tensor)
+        if bool(finite.all()):
+            lines.append(f"    {name}: ок, |max|={float(tensor.abs().max()):.4g}")
+        else:
+            lines.append(f"    {name}: НЕ КОНЕЧЕН ({int((~finite).sum())} из {tensor.numel()})")
+
+    lines.append("  вход и цели:")
+    flag("image", images)
+    for key in ("mask", "label", "area"):
+        if key in batch:
+            flag(key, batch[key])
+    lines.append("  выход модели:")
+    outputs_bad = False
+    for key, value in outputs.items():
+        flag(key, value)
+        outputs_bad |= (isinstance(value, torch.Tensor) and value.is_floating_point()
+                        and not bool(torch.isfinite(value).all()))
+
+    chain: list[str] = []
+
+    def make_hook(name: str):
+        def hook(module, inputs, output):
+            tensors = output if isinstance(output, (list, tuple)) else [output]
+            for tensor in tensors:
+                if (isinstance(tensor, torch.Tensor) and tensor.is_floating_point()
+                        and not bool(torch.isfinite(tensor).all())):
+                    chain.append(name)
+                    return
+        return hook
+
+    handles = [
+        module.register_forward_hook(make_hook(name))
+        for name, module in model.named_modules() if not list(module.children())
+    ]
+    # momentum=0 замораживает running-статистику BatchNorm на время пробы:
+    # сам forward её обновляет, и диагностика не должна добавлять модели
+    # второй порции порчи поверх той, что уже случилась на боевом проходе
+    norms = [m for m in model.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
+    momenta = [m.momentum for m in norms]
+    try:
+        for norm in norms:
+            norm.momentum = 0.0
+        with torch.amp.autocast("cuda", dtype=dtype, enabled=dtype is not None):
+            model(images)
+    finally:
+        for norm, momentum in zip(norms, momenta):
+            norm.momentum = momentum
+        for handle in handles:
+            handle.remove()
+
+    if chain:
+        lines.append(f"  первым переполнился: {chain[0]}")
+        lines.append(f"  дальше по цепочке ({len(chain)} модулей): {' -> '.join(chain[1:6])}")
+    elif outputs_bad:
+        # повтор на тех же весах и том же батче обязан воспроизвести настоящее
+        # переполнение свёртки; если не воспроизвёл — виноват недетерминизм
+        # (дропаут в cls-голове, выбор алгоритма cudnn), и это тоже улика
+        lines.append(
+            "  выход модели не конечен, но повторный forward на том же батче чист — "
+            "переполнение плавающее, а не детерминированное"
+        )
+    else:
+        lines.append("  forward чист и выход конечен — значит nan родился в лоссе, а не в сети")
+    if "index" in batch:
+        lines.append(f"  строки датасета в батче: {batch['index'].tolist()}")
+    return "\n".join(lines)
 
 
 def train_one_epoch(
@@ -113,6 +212,7 @@ def train_one_epoch(
     meters: dict[str, AverageMeter] = {"loss": AverageMeter()}
     start = time.time()
     n_steps = min(len(loader), max_steps) if max_steps else len(loader)
+    nan_steps = 0
 
     optimizer.zero_grad(set_to_none=True)
     for step, batch in enumerate(loader):
@@ -126,6 +226,25 @@ def train_one_epoch(
         with torch.amp.autocast("cuda", dtype=dtype, enabled=dtype is not None):
             outputs = model(images)
             loss, parts = criterion(outputs, batch)
+
+        # Синхронизация с GPU тут не лишняя: `float(loss)` всё равно нужен
+        # метру ниже, так что значение берётся один раз и переиспользуется.
+        loss_value = float(loss.detach())
+        if not np.isfinite(loss_value):
+            # Раньше nan-шаг молча уходил в backward. При fp16 его гасил
+            # GradScaler (шаг пропускался по found_inf), но при bf16 и amp=off
+            # скалера нет вовсе, и nan-градиент убивал веса насмерть. Плюс в
+            # любом режиме forward уже успевал записать inf в running-статистику
+            # BatchNorm — это не откатывается и ломает eval до конца прогона.
+            nan_steps += 1
+            if logger and nan_steps <= 3:
+                logger.info(
+                    f"  ЭПОХА {epoch} ШАГ {step + 1}: лосс не конечен "
+                    f"({', '.join(f'{k}={v}' for k, v in parts.items())}). Разбор:\n"
+                    + _nan_report(model, images, batch, outputs, dtype)
+                )
+            optimizer.zero_grad(set_to_none=True)  # накопленное тоже под подозрением
+            continue
 
         scaled = loss / accum_steps
         if scaler is not None and scaler.is_enabled():
@@ -160,7 +279,7 @@ def train_one_epoch(
             if scheduler is not None and stepped:
                 scheduler.step()
 
-        meters["loss"].update(float(loss.detach()), images.size(0))
+        meters["loss"].update(loss_value, images.size(0))
         for name, value in parts.items():
             meters.setdefault(name, AverageMeter()).update(value, images.size(0))
 
@@ -169,14 +288,16 @@ def train_one_epoch(
             eta = (time.time() - start) * (1 - done) / max(done, 1e-9)
             lr = optimizer.param_groups[0]["lr"]
             detail = " ".join(f"{k}={m.avg:.4f}" for k, m in meters.items())
+            skipped = f" nan-шагов={nan_steps}" if nan_steps else ""
             logger.info(
                 f"  эпоха {epoch} [{step + 1}/{n_steps}] {detail} lr={lr:.2e} "
-                f"ETA {format_seconds(eta)}"
+                f"ETA {format_seconds(eta)}{skipped}"
             )
 
     return {name: meter.avg for name, meter in meters.items()} | {
         "lr": optimizer.param_groups[0]["lr"],
         "epoch_time_s": round(time.time() - start, 1),
+        "nan_steps": nan_steps,
     }
 
 

@@ -36,12 +36,26 @@ def pick_device(requested: str = "auto") -> torch.device:
 
 
 class AverageMeter:
+    """Среднее с защитой от nan.
+
+    Без неё ОДИН аварийный шаг отравлял `sum` и все последующие строки лога
+    показывали nan до конца эпохи — по логу невозможно было понять, шаг это был
+    один или все шесть тысяч. Туда же уезжал `train/loss` в metrics.jsonl,
+    то есть и сравнение прогонов в плане. Не-конечные значения считаются
+    отдельно: они видны в `skipped`, но среднее не портят.
+    """
+
     def __init__(self) -> None:
         self.sum = 0.0
         self.count = 0
+        self.skipped = 0
 
     def update(self, value: float, n: int = 1) -> None:
-        self.sum += float(value) * n
+        value = float(value)
+        if not np.isfinite(value):
+            self.skipped += n
+            return
+        self.sum += value * n
         self.count += n
 
     @property
