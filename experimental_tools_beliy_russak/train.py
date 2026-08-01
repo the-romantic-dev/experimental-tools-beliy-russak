@@ -27,10 +27,18 @@ from .datasets import SegDataset, build_sampler
 from .engine import build_optimizer, build_scheduler, train_one_epoch, validate
 from .logging_utils import RunLogger
 from .losses import build_loss
-from .metrics import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID
+from .metrics import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID, AICAccumulator
 from .models import build_model, count_parameters
 from .models.aux_heads import parse_aux_spec
 from .splits import load_folds
+from .stats import (
+    compare_to_reference,
+    gate_check,
+    gate_metrics,
+    load_reference,
+    resolve_reference,
+    stats_settings,
+)
 from .transforms import build_transform
 from .utils import ModelEma, gpu_memory_gb, make_run_dir, pick_device, seed_everything
 
@@ -242,6 +250,16 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
         start_epoch, best = _restore_state(state, model, optimizer, scheduler, ema)
         logger.info(f"продолжаю с эпохи {start_epoch}, лучший AIC пока {best:.4f}")
 
+    settings = stats_settings(cfg)
+    reference = None
+    if settings is not None:
+        reference = load_reference(resolve_reference(settings.reference))
+        logger.info(
+            f"эталон: {reference.name}, операционная точка {reference.op}, "
+            f"train_sigma={settings.train_sigma}"
+        )
+    gate_stop = False
+
     epochs = int(cfg.train.get("epochs", 10))
     patience = int(cfg.train.get("early_stop", 0))
     since_improved = 0
@@ -272,6 +290,17 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
         at_half = accumulator.evaluate(mask_threshold=0.5)
         tuned = accumulator.best(mask_grid, cls_grid, area_grid)
 
+        per_epoch = int(cfg.data.get("epoch_size") or len(train_loader.dataset))
+        gate = None
+        if reference is not None:
+            gate = gate_check(
+                reference.curve,
+                samples=(epoch + 1) * per_epoch,
+                aic=tuned.aic,
+                gate_delta=settings.gate_delta,
+                after_samples=settings.gate_after_samples,
+            )
+
         metrics = {
             **{f"train/{k}": v for k, v in train_stats.items()},
             "val/loss": val_stats["val_loss"],
@@ -285,6 +314,7 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
             "val/best_cls_thr": tuned.cls_threshold,
             "val/best_min_area": tuned.min_area,
             "gpu_gb": round(gpu_memory_gb(), 2),
+            **gate_metrics(gate),
         }
         logger.log_metrics(epoch, metrics)
         nan_note = (
@@ -295,6 +325,12 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
             f"эпоха {epoch}: train_loss={train_stats['loss']:.4f} "
             f"val_loss={val_stats['val_loss']:.4f} | {tuned}{nan_note}"
         )
+        if gate is not None and gate.ref_aic is not None:
+            logger.info(
+                f"  эталон {reference.name} @{(epoch + 1) * per_epoch} показов = "
+                f"{gate.ref_aic:.4f}   {gate.reason}"
+                + ("   ГЕЙТ СРАБОТАЛ" if gate.fired else "")
+            )
 
         state = _checkpoint_state(
             model, ema, optimizer, scheduler, cfg,
@@ -315,13 +351,39 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
                 logger.info(f"ранняя остановка: {patience} эпох без улучшения")
                 break
 
+        # снимаем ПОСЛЕ сохранения чекпоинта: у снятого плеча всё равно должны
+        # остаться его артефакты, иначе разбираться в причине будет не по чему
+        if gate is not None and gate.fired and settings.gate_action == "stop":
+            logger.info("снимаю прогон по гейту (stats.gate_action=stop)")
+            gate_stop = True
+            break
+
     summary = {
         "run": run_dir.name,
         "best_aic": best,
         "best": best_result.as_dict() if best_result else None,
         "config": str(cfg.get("_source", "")),
         "epochs_done": epoch + 1,
+        "status": "killed" if gate_stop else "ok",
     }
+    if gate_stop:
+        summary["killed_reason"] = f"гейт по эталону {reference.name} на эпохе {epoch}"
+
+    if reference is not None and best_result is not None and not gate_stop:
+        comparison = compare_to_reference(
+            AICAccumulator.load(run_dir / "oof" / "val.npz"),
+            val_df["stem"].to_numpy(),
+            dict(cfg),
+            reference,
+            own_op=(best_result.mask_threshold, best_result.cls_threshold, best_result.min_area),
+            train_sigma=settings.train_sigma,
+            bootstrap_n=settings.bootstrap_n,
+            bootstrap_seed=settings.bootstrap_seed,
+        )
+        summary["verdict"] = comparison.as_dict()
+        for line in comparison.report(reference.name):
+            logger.info(line)
+
     (run_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )

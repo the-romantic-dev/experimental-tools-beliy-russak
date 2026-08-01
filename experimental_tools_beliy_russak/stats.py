@@ -299,6 +299,17 @@ def gate_check(
     return Gate(ref_aic, delta, fired, reason)
 
 
+def gate_metrics(gate: Gate | None) -> dict:
+    """Поля гейта для metrics.jsonl. Пустой словарь = машинерия выключена."""
+    if gate is None:
+        return {}
+    return {
+        "ref/aic_at_samples": gate.ref_aic,
+        "ref/delta": gate.delta,
+        "ref/gate": bool(gate.fired),
+    }
+
+
 @dataclass(frozen=True)
 class Reference:
     """Опорный прогон, поднятый с диска."""
@@ -414,9 +425,11 @@ class Comparison:
         tail = ""
         if self.verdict.seeds_needed:
             runs = 2 * self.verdict.seeds_needed
+            # без склонений: числа тут любые, а «22 сида» и «24 прогонов» рядом
+            # читаются как опечатка
             tail = (
-                f": нужно {self.verdict.seeds_needed} сидов на плечо "
-                f"({runs} прогонов, ~{runs * hours_per_run:.0f} ч)"
+                f" — чтобы подтвердить, сидов на плечо: {self.verdict.seeds_needed}, "
+                f"прогонов: {runs}, ~{runs * hours_per_run:.0f} ч"
             )
         lines.append(f"  {self.verdict.label.upper()}{tail}")
         lines.append(f"  причина: {self.verdict.reason}")
