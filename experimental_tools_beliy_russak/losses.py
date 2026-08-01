@@ -45,11 +45,22 @@ from .geometry import normalize_area
 from .registry import LOSSES, register_loss
 
 
+# Всё, что суммирует ПО ВСЕМУ КАДРУ, считается в fp32 явным `.float()`, а не в
+# dtype логитов. Под autocast(fp16) логиты приходят половинками, `sigmoid` их
+# такими и оставляет, а у fp16 потолок 65504 — при 768x768 = 589824 пикселях
+# сумма переполняется в inf, стоит средней вероятности (или площади маски)
+# превысить 11.1% кадра. Дальше знаменатель становится inf, дробь — нулём, и
+# лосс молча залипает ровно на 1.0 с НУЛЕВЫМ градиентом; а когда модель
+# научится и числитель тоже перевалит 65504, получается inf/inf = nan.
+# В индексе 61% позитивов имеют маску крупнее 11%, то есть без этого каста
+# dice на 768 не учил больше половины позитивных кадров, а на хорошей модели
+# ронял прогон в nan. BCE каста не требует: autocast сам считает
+# binary_cross_entropy_with_logits в fp32.
 def soft_dice_loss(
     logits: torch.Tensor, targets: torch.Tensor, smooth: float = 1.0, reduce: bool = True
 ) -> torch.Tensor:
-    probs = torch.sigmoid(logits).flatten(1)
-    targets = targets.flatten(1)
+    probs = torch.sigmoid(logits.float()).flatten(1)
+    targets = targets.float().flatten(1)
     intersection = (probs * targets).sum(dim=1)
     denominator = probs.sum(dim=1) + targets.sum(dim=1)
     dice = (2.0 * intersection + smooth) / (denominator + smooth)
@@ -66,8 +77,8 @@ def tversky_loss(
     Для AIC полезно уметь двигать этот баланс: FP на негативах бьют по метрике
     сильнее, чем недобор площади на позитивах.
     """
-    probs = torch.sigmoid(logits).flatten(1)
-    targets = targets.flatten(1)
+    probs = torch.sigmoid(logits.float()).flatten(1)
+    targets = targets.float().flatten(1)
     true_pos = (probs * targets).sum(dim=1)
     false_pos = (probs * (1 - targets)).sum(dim=1)
     false_neg = ((1 - probs) * targets).sum(dim=1)
