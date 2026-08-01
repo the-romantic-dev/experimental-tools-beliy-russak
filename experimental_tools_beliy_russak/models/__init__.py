@@ -20,6 +20,7 @@ FPR_neg в метрике AIC.
 
 from __future__ import annotations
 
+import functools
 from typing import Any
 
 import torch
@@ -211,6 +212,31 @@ def restore_pretrained_stem(encoder: nn.Module, in_channels: int, rgb_channels: 
     return True
 
 
+@functools.lru_cache(maxsize=None)
+def _fp32_class(cls: type) -> type:
+    """Подкласс, который считает forward с выключенным autocast.
+
+    Подмена `__class__` вместо обёртки-модуля — не эстетство, а требование двух
+    мест. Во-первых, обёртка добавила бы уровень в имена параметров, и все
+    существующие чекпоинты перестали бы грузиться. Во-вторых, `ModelEma` копирует
+    модель через `deepcopy`: подмена метода `forward` на замыкание утащила бы за
+    собой ссылку на ИСХОДНЫЙ модуль, и EMA-копия молча считала бы чужие веса (та
+    же грабля, из-за которой `_FeatureCatcher` сделан отдельным объектом).
+    Классы deepcopy копирует по ссылке, поэтому подмена переживает и его.
+    """
+    def forward(self, x, *args, **kwargs):
+        with torch.amp.autocast("cuda", enabled=False):
+            return cls.forward(self, x.float(), *args, **kwargs)
+
+    return type(f"Fp32{cls.__name__}", (cls,), {"forward": forward, "_is_fp32": True})
+
+
+def force_fp32(module: nn.Module) -> None:
+    """Считать этот модуль в fp32 даже под autocast(fp16)."""
+    if not getattr(module, "_is_fp32", False):
+        module.__class__ = _fp32_class(module.__class__)
+
+
 def _build_smp(cfg: dict) -> tuple[nn.Module, str, nn.Module | None]:
     import segmentation_models_pytorch as smp
 
@@ -255,7 +281,38 @@ def _build_smp(cfg: dict) -> tuple[nn.Module, str, nn.Module | None]:
     elif kinds and fuse != "input":
         raise ValueError(f"неизвестный способ фьюза: {fuse}; есть input|gate")
 
+    if cfg.get("fp32_decoder_stem", True):
+        _protect_decoder_stem(core)
+
     return core, cls_head, fusion
+
+
+def _protect_decoder_stem(core: nn.Module) -> None:
+    """Первую свёртку декодера считать в fp32: она упирается в потолок fp16.
+
+    Замер на long_baseline_768 (unet + convnext_tiny, 768 px, 13 эпох): у
+    `decoder.blocks.0.conv1` BatchNorm накопил running_var 1.16e8 (sigma ~10 800)
+    при running_mean 19 200, тогда как у соседних блоков это 4579 и 1629. То есть
+    выход ЭТОЙ свёртки живёт на одном порядке с пределом fp16 (65504), и хвост
+    распределения за него изредка вылезает.
+
+    Дальше цепочка необратимая: свёртка отдаёт inf, следующий BatchNorm делает из
+    него (inf-inf)/inf = nan и НАВСЕГДА пишет inf в running_mean/running_var —
+    градиентный скалер такое не откатывает, буферы обновляются в forward. В
+    train-режиме BN считает по батчу и лосс «выздоравливает», а eval берёт
+    испорченные буферы и валидация падает.
+
+    Почему именно этот блок: он один принимает самую глубокую фичу энкодера
+    (у ConvNeXt в последней стадии активации известно крупные и растут по ходу
+    обучения — за 84k шагов running_var вырос с 1209 до 1.16e8). Остальная сеть
+    остаётся в fp16, так что цена — одна свёртка 1152->256 на 48x48.
+
+    Функцию сети это не меняет, только точность её вычисления, и имена
+    параметров остаются прежними — старые чекпоинты грузятся как есть.
+    """
+    blocks = getattr(getattr(core, "decoder", None), "blocks", None)
+    if blocks:
+        force_fp32(blocks[0].conv1)
 
 
 def _wrap_gated(encoder: nn.Module, kinds: tuple[str, ...], width: int) -> GatedDualEncoder:

@@ -80,6 +80,7 @@ SCHEMA: dict[str, Any] = {
         "stream": LEAF,
         "fuse": LEAF,
         "stream_width": LEAF,
+        "fp32_decoder_stem": LEAF,
         "hf_name": LEAF,
         # имена голов проверяет реестр AUX_HEADS при сборке модели, а не схема
         "aux_heads": OPEN,
