@@ -17,6 +17,7 @@ from experimental_tools_beliy_russak.stats import (
     PerImage,
     align_by_stem,
     comparable,
+    gate_check,
     paired_bootstrap,
     per_image,
     seeds_needed,
@@ -200,3 +201,46 @@ def test_comparable_finds_the_key_that_diverged():
     ok, diverged = comparable(base, other)
     assert not ok
     assert diverged == ["data.epoch_size", "train.epochs"]
+
+
+#: кривая f0-control-768: 8000 показов на эпоху, val/aic_tuned по эпохам
+F0_CURVE = (
+    np.array([8000, 16000, 24000, 32000, 40000, 48000], dtype=float),
+    np.array([0.3490, 0.5207, 0.6563, 0.7361, 0.7794, 0.8030]),
+)
+
+
+def test_gate_stays_silent_before_the_minimum_budget():
+    """На 16k показов даже провальное плечо не снимаем: кривые ещё не разошлись."""
+    got = gate_check(F0_CURVE, samples=16000, aic=0.20, gate_delta=-0.05, after_samples=24000)
+    assert not got.fired
+    assert got.delta is None
+
+
+def test_gate_fires_on_the_real_effnetv2_numbers():
+    """g3-effnetv2-s на 24k показов: 0.5970 против 0.6563 у эталона."""
+    got = gate_check(F0_CURVE, samples=24000, aic=0.5970, gate_delta=-0.05, after_samples=24000)
+    assert got.fired
+    assert got.ref_aic == pytest.approx(0.6563)
+    assert got.delta == pytest.approx(-0.0593, abs=1e-4)
+
+
+def test_gate_lets_a_normal_arm_through():
+    """f7-aux-all на 24k: 0.6771 против 0.6563 — выше эталона, снимать нечего."""
+    got = gate_check(F0_CURVE, samples=24000, aic=0.6771, gate_delta=-0.05, after_samples=24000)
+    assert not got.fired
+    assert got.delta == pytest.approx(0.0208, abs=1e-4)
+
+
+def test_gate_interpolates_between_reference_epochs():
+    """Плечо с epoch_size=4000 попадает на 28k — середину между эпохами эталона."""
+    got = gate_check(F0_CURVE, samples=28000, aic=0.70, gate_delta=-0.05, after_samples=24000)
+    assert got.ref_aic == pytest.approx((0.6563 + 0.7361) / 2)
+    assert not got.fired
+
+
+def test_gate_refuses_to_judge_outside_the_reference_curve():
+    got = gate_check(F0_CURVE, samples=96000, aic=0.10, gate_delta=-0.05, after_samples=24000)
+    assert not got.fired
+    assert got.delta is None
+    assert "кривой эталона" in got.reason

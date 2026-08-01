@@ -239,3 +239,49 @@ def verdict(
         f"|Δ| < {floor:.4f} = 2*train_sigma*sqrt(2)",
         seeds_needed(delta, train_sigma),
     )
+
+
+@dataclass(frozen=True)
+class Gate:
+    """Решение онлайн-гейта на одной эпохе."""
+
+    ref_aic: float | None
+    delta: float | None
+    fired: bool
+    reason: str
+
+
+def gate_check(
+    curve: tuple[np.ndarray, np.ndarray],
+    samples: int,
+    aic: float,
+    *,
+    gate_delta: float,
+    after_samples: int,
+) -> Gate:
+    """Отстаёт ли плечо от эталона на том же числе показов.
+
+    Сравнение идёт по ЧИСЛУ ПОКАЗОВ, а не по индексу эпохи: иначе плечо с
+    `epoch_size: 4000, epochs: 12` нельзя было бы сопоставить с эталоном 8000x6.
+
+    Оба значения берутся в своей тюненой точке. На ранних эпохах оптимумы
+    порогов сильно разъезжаются (0.375 против 0.2), и общая точка давала бы
+    ложные срабатывания. Гейт нарочно снисходительный: он ловит провалы, а не
+    отличает соседние плечи.
+    """
+    if samples < after_samples:
+        return Gate(None, None, False, f"рано судить: {samples} < {after_samples} показов")
+
+    xs, ys = curve
+    if len(xs) == 0 or samples < xs[0] or samples > xs[-1]:
+        return Gate(None, None, False, f"{samples} показов вне кривой эталона")
+
+    ref_aic = float(np.interp(samples, xs, ys))
+    delta = float(aic - ref_aic)
+    fired = delta <= gate_delta
+    reason = (
+        f"отставание {delta:+.4f} при пороге {gate_delta:+.4f}"
+        if fired
+        else f"отставание {delta:+.4f} в пределах порога {gate_delta:+.4f}"
+    )
+    return Gate(ref_aic, delta, fired, reason)
