@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .metrics import EPS, FP_AREA_THRESHOLD, AICAccumulator
+from .metrics import EPS, FP_AREA_THRESHOLD, AICAccumulator, harmonic_aic
 
 
 @dataclass(frozen=True)
@@ -77,3 +77,70 @@ def align_by_stem(stems_a, stems_b) -> tuple[np.ndarray, np.ndarray]:
     idx_a = order_a[np.searchsorted(a, common, sorter=order_a)]
     idx_b = order_b[np.searchsorted(b, common, sorter=order_b)]
     return idx_a, idx_b
+
+
+@dataclass(frozen=True)
+class Boot:
+    """Результат парного бутстрапа разницы AIC: плечо минус эталон."""
+
+    delta: float
+    lo: float
+    hi: float
+    sd: float
+
+
+def _aic_of_draws(sample: PerImage, pos_idx: np.ndarray, neg_idx: np.ndarray) -> np.ndarray:
+    """AIC для пачки бутстрап-выборок сразу; `*_idx` имеют форму (реплик, кадров)."""
+    dice = sample.dice[pos_idx].mean(axis=1)
+    fpr = sample.alarm[neg_idx].mean(axis=1)
+    rest = 1.0 - fpr
+    return 2.0 * dice * rest / np.maximum(dice + rest, 1e-12)
+
+
+def paired_bootstrap(
+    a: PerImage,
+    b: PerImage,
+    *,
+    n: int = 2000,
+    seed: int = 0,
+    block: int = 250,
+) -> Boot:
+    """Парный бутстрап: обе выборки пересэмплируются ОДНИМИ И ТЕМИ ЖЕ индексами.
+
+    Парность здесь не украшение: кадры общие, и совпадающая часть шума выборки
+    сокращается. На независимых выборках интервал был бы вдвое шире и не мерил
+    бы ничего полезного.
+
+    Считается блоками по `block` реплик: матрица индексов на 2000 реплик и 5025
+    позитивов заняла бы 160 МБ, блоками — около 10 МБ.
+    """
+    if a.dice.shape != b.dice.shape:
+        raise ValueError("наборы кадров разной длины — сначала align_by_stem")
+    if not np.array_equal(a.is_pos, b.is_pos):
+        raise ValueError("разметка позитивов различается — сначала align_by_stem")
+
+    pos = np.flatnonzero(a.is_pos)
+    neg = np.flatnonzero(~a.is_pos)
+    if pos.size == 0 or neg.size == 0:
+        raise ValueError("для AIC нужны и позитивы, и негативы")
+
+    rng = np.random.default_rng(seed)
+    diffs = np.empty(n, dtype=np.float64)
+    done = 0
+    while done < n:
+        size = min(block, n - done)
+        pos_idx = rng.choice(pos, size=(size, pos.size), replace=True).astype(np.int32)
+        neg_idx = rng.choice(neg, size=(size, neg.size), replace=True).astype(np.int32)
+        diffs[done:done + size] = _aic_of_draws(b, pos_idx, neg_idx) - _aic_of_draws(a, pos_idx, neg_idx)
+        done += size
+
+    delta = (
+        harmonic_aic(b.dice[pos].mean(), b.alarm[neg].mean())
+        - harmonic_aic(a.dice[pos].mean(), a.alarm[neg].mean())
+    )
+    return Boot(
+        delta=float(delta),
+        lo=float(np.percentile(diffs, 2.5)),
+        hi=float(np.percentile(diffs, 97.5)),
+        sd=float(diffs.std(ddof=1)) if n > 1 else 0.0,
+    )
