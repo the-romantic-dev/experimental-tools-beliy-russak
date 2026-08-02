@@ -61,6 +61,13 @@ SCHEMA: dict[str, Any] = {
         "extra_negatives": LEAF,
         "small_area_fraction": LEAF,
         "small_area_threshold": LEAF,
+        "synth": {
+            "fraction": LEAF,
+            "area_range": LEAF,
+            "ops": LEAF,
+            "feather": LEAF,
+            "post_jpeg": LEAF,
+        },
         "val_keep_negatives": LEAF,
         "val_seed": LEAF,
         "epoch_size": LEAF,
@@ -80,6 +87,7 @@ SCHEMA: dict[str, Any] = {
         "stream": LEAF,
         "fuse": LEAF,
         "stream_width": LEAF,
+        "skip_norm": LEAF,
         "fp32_decoder_stem": LEAF,
         "hf_name": LEAF,
         # имена голов проверяет реестр AUX_HEADS при сборке модели, а не схема
@@ -132,6 +140,11 @@ SCHEMA: dict[str, Any] = {
         "mask_grid": LEAF,
         "cls_grid": LEAF,
         "area_grid": LEAF,
+    },
+
+    "budget": {
+        "exempt": LEAF,
+        "exempt_reason": LEAF,
     },
 
     "stats": {

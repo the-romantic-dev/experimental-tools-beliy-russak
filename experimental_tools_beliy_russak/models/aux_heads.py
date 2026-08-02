@@ -23,27 +23,19 @@ class HeadSpec(NamedTuple):
     out_dim: int
     loss: str            # mse | bce
     positives_only: bool
-    target_key: str      # какой ключ батча служит целью
-    description: str
 
 
+#: цель головы `<имя>` лежит в батче под ключом `aux_<имя>`; исключение — `area`,
+#: она считается из сырого поля `area` нормировкой прямо в лоссе (см. losses.py)
 AUX_HEADS: dict[str, HeadSpec] = {
-    "area": HeadSpec(
-        1, "mse", False, "aux_area",
-        "нормированный логарифм доли кадра; у чистых кадров ровно 0",
-    ),
-    "border": HeadSpec(
-        1, "bce", True, "aux_border",
-        "касается ли маска границы полезной области",
-    ),
-    "centroid": HeadSpec(
-        2, "mse", True, "aux_centroid",
-        "центр масс маски в долях кадра (y, x)",
-    ),
-    "components": HeadSpec(
-        1, "mse", True, "aux_components",
-        "нормированный log1p числа связных компонент",
-    ),
+    # нормированный логарифм доли кадра; у чистых кадров ровно 0
+    "area": HeadSpec(1, "mse", False),
+    # касается ли маска границы полезной области
+    "border": HeadSpec(1, "bce", True),
+    # центр масс маски в долях кадра (y, x)
+    "centroid": HeadSpec(2, "mse", True),
+    # нормированный log1p числа связных компонент
+    "components": HeadSpec(1, "mse", True),
 }
 
 

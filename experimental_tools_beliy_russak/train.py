@@ -2,6 +2,7 @@
 
 Результат прогона целиком лежит в runs/<name>/:
     config.yaml      снапшот конфига со всеми переопределениями
+    env.json         коммит, версии пакетов, командная строка — чем посчитано
     train.log        человекочитаемый лог
     metrics.jsonl    построчные метрики (источник правды)
     metrics.csv      то же для Excel
@@ -9,19 +10,18 @@
     ckpt/best.pt     лучший чекпоинт по AIC на валидации
     ckpt/last.pt     последний (для resume)
     oof/val.npz      сжатая статистика валидации -> свип порогов без модели
-    summary.json     итог: лучший AIC и подобранные пороги
+    summary.json     итог: лучший AIC, подобранные пороги и бюджет GFLOPs
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
+from . import budget
 from .config import Cfg, config_hash, flatten, save_config
 from .datasets import SegDataset, build_sampler
 from .engine import build_optimizer, build_scheduler, train_one_epoch, validate
@@ -30,6 +30,7 @@ from .losses import build_loss
 from .metrics import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID, AICAccumulator
 from .models import build_model, count_parameters
 from .models.aux_heads import parse_aux_spec
+from .provenance import write_environment
 from .splits import load_folds
 from .stats import (
     compare_to_reference,
@@ -93,6 +94,7 @@ def _checkpoint_state(
     epoch: int,
     best: float,
     calib: dict,
+    scaler=None,
 ) -> dict:
     """Всё, что нужно, чтобы продолжить прогон ровно с этой точки.
 
@@ -100,12 +102,17 @@ def _checkpoint_state(
     шедулер строится заново на каждом запуске и в `__init__` выставляет LR
     начала warmup. Без этого ключа resume с середины косинуса откатывал LR к
     прогревочному и проходил расписание по второму кругу.
+
+    По той же причине сохраняется и масштаб GradScaler: заново созданный скалер
+    стартует с 65536, а это на порядки больше устоявшегося значения, и первые
+    шаги после resume гарантированно уходят в переполнение и пропускаются.
     """
     return {
         "model": model.state_dict(),
         "ema": ema.module.state_dict() if ema is not None else None,
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict() if scheduler is not None else None,
+        "scaler": scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
         "epoch": epoch,
         "best": best,
         "cfg": dict(cfg),
@@ -113,18 +120,20 @@ def _checkpoint_state(
     }
 
 
-def _restore_state(state: dict, model, optimizer, scheduler, ema) -> tuple[int, float]:
+def _restore_state(state: dict, model, optimizer, scheduler, ema, scaler=None) -> tuple[int, float]:
     """Разворачивает чекпоинт обратно; возвращает эпоху продолжения и лучший AIC.
 
     Порядок важен: `optimizer.load_state_dict` возвращает param_groups (вместе
     с их lr) на момент сохранения, поэтому шедулер восстанавливаем после него.
     `state.get` вместо `state[...]` — чекпоинты, записанные до появления ключа,
-    должны читаться по-прежнему, просто без расписания.
+    должны читаться по-прежнему, просто без расписания и без масштаба скалера.
     """
     model.load_state_dict(state["model"])
     optimizer.load_state_dict(state["optimizer"])
     if scheduler is not None and state.get("scheduler"):
         scheduler.load_state_dict(state["scheduler"])
+    if scaler is not None and state.get("scaler"):
+        scaler.load_state_dict(state["scaler"])
     if ema is not None and state.get("ema"):
         ema.module.load_state_dict(state["ema"])
     return state["epoch"] + 1, state.get("best", -1.0)
@@ -180,9 +189,12 @@ def build_dataloaders(cfg: Cfg, logger: RunLogger) -> tuple[DataLoader, DataLoad
         gt_binarize=cfg.data.get("gt_binarize", 0.5),
         aux_targets=aux_targets,
     )
+    # синтез — только в train: подмешать его в валидацию значит мерить метрику
+    # на других кадрах, чем все остальные прогоны, и потерять сравнимость
     train_ds = SegDataset(
         train_df, build_transform(cfg.data, train=True, seed=seed),
-        extra_negatives=float(cfg.data.get("extra_negatives", 0.0)), seed=seed, **common,
+        extra_negatives=float(cfg.data.get("extra_negatives", 0.0)), seed=seed,
+        synth=cfg.data.get("synth"), **common,
     )
     val_ds = SegDataset(
         val_df, build_transform(cfg.data, train=False), extra_negatives=0.0,
@@ -224,12 +236,23 @@ def build_dataloaders(cfg: Cfg, logger: RunLogger) -> tuple[DataLoader, DataLoad
 
 
 def run(cfg: Cfg, resume: str | None = None) -> dict:
+    # Бюджет вычислений — самое первое, что проверяется: прогон вне лимита
+    # получил бы 0 за этап, и тратить на него ни данные, ни карту, ни папку в
+    # runs/ незачем. Пометка `budget.exempt` пропускает исследовательские
+    # прогоны — но она же уедет в summary.json, и сабмит её не признает.
+    verdict = budget.check(cfg)
+    if not verdict.ok:
+        raise ValueError(budget.rejection_text(cfg, verdict))
+
     seed_everything(int(cfg.get("seed", 42)), bool(cfg.get("deterministic", False)))
     name = cfg.get("name") or f"{cfg.model.get('arch')}-{config_hash(cfg)}"
     run_dir = make_run_dir(str(name), resume=bool(resume))
     logger = RunLogger(run_dir, use_tensorboard=bool(cfg.get("tensorboard", True)))
     save_config(cfg, run_dir / "config.yaml")
+    # снапшота конфига мало: тот же конфиг на другой версии timm даёт другую сеть
+    write_environment(run_dir)
     logger.info(f"прогон: {run_dir.name}  ->  {run_dir}")
+    logger.info(f"бюджет: {verdict.text}")
 
     device = pick_device(str(cfg.get("device", "auto")))
     train_loader, val_loader, val_df = build_dataloaders(cfg, logger)
@@ -247,7 +270,7 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
     start_epoch, best = 0, -1.0
     if resume:
         state = torch.load(resume, map_location=device, weights_only=False)
-        start_epoch, best = _restore_state(state, model, optimizer, scheduler, ema)
+        start_epoch, best = _restore_state(state, model, optimizer, scheduler, ema, scaler)
         logger.info(f"продолжаю с эпохи {start_epoch}, лучший AIC пока {best:.4f}")
 
     settings = stats_settings(cfg)
@@ -258,6 +281,11 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
             f"эталон: {reference.name}, операционная точка {reference.op}, "
             f"train_sigma={settings.train_sigma}"
         )
+        if len(reference.curve[0]) == 0:
+            logger.info(
+                "  у эталона не задан data.epoch_size — кривой по числу показов нет, "
+                "онлайн-гейт выключен (итоговое сравнение считается как обычно)"
+            )
     gate_stop = False
 
     epochs = int(cfg.train.get("epochs", 10))
@@ -266,9 +294,11 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
     best_result = None
     epoch = start_epoch - 1  # если цикл не выполнится ни разу (resume на последней эпохе)
 
-    mask_grid = list(cfg.get("calib", {}).get("mask_grid", DEFAULT_MASK_GRID))
-    cls_grid = list(cfg.get("calib", {}).get("cls_grid", DEFAULT_CLS_GRID))
-    area_grid = list(cfg.get("calib", {}).get("area_grid", DEFAULT_AREA_GRID))
+    calib = dict(cfg.get("calib", {}) or {})
+    n_bins = int(calib.get("n_bins", 256))
+    mask_grid = list(calib.get("mask_grid", DEFAULT_MASK_GRID))
+    cls_grid = list(calib.get("cls_grid", DEFAULT_CLS_GRID))
+    area_grid = list(calib.get("area_grid", DEFAULT_AREA_GRID))
 
     for epoch in range(start_epoch, epochs):
         train_stats = train_one_epoch(
@@ -284,8 +314,7 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
         eval_model = ema.module if ema is not None else model
         accumulator, val_stats = validate(
             eval_model, val_loader, criterion, device, amp=amp,
-            n_bins=int(cfg.get("calib", {}).get("n_bins", 256)),
-            max_steps=cfg.train.get("max_val_steps"),
+            n_bins=n_bins, max_steps=cfg.train.get("max_val_steps"),
         )
         at_half = accumulator.evaluate(mask_threshold=0.5)
         tuned = accumulator.best(mask_grid, cls_grid, area_grid)
@@ -332,24 +361,30 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
                 + ("   ГЕЙТ СРАБОТАЛ" if gate.fired else "")
             )
 
+        improved = tuned.aic > best
+        if improved:
+            best, best_result, since_improved = tuned.aic, tuned, 0
+        else:
+            since_improved += 1
+
+        # `best` в чекпоинте учитывает и ТЕКУЩУЮ эпоху. Раньше last.pt писался до
+        # сравнения и хранил рекорд предыдущих эпох: resume с такого файла начинал
+        # с заниженной планки и на первом же улучшении относительно неё затирал
+        # best.pt моделью хуже той, что там уже лежала.
         state = _checkpoint_state(
             model, ema, optimizer, scheduler, cfg,
-            epoch=epoch, best=best, calib=tuned.as_dict(),
+            epoch=epoch, best=best, calib=tuned.as_dict(), scaler=scaler,
         )
         torch.save(state, run_dir / "ckpt" / "last.pt")
 
-        if tuned.aic > best:
-            best, best_result, since_improved = tuned.aic, tuned, 0
-            state["best"] = best
+        if improved:
             torch.save(state, run_dir / "ckpt" / "best.pt")
             accumulator.save(run_dir / "oof" / "val.npz")
             val_df.to_parquet(run_dir / "oof" / "val_rows.parquet", index=False)
             logger.info(f"  новый лучший AIC {best:.4f} -> ckpt/best.pt")
-        else:
-            since_improved += 1
-            if patience and since_improved >= patience:
-                logger.info(f"ранняя остановка: {patience} эпох без улучшения")
-                break
+        elif patience and since_improved >= patience:
+            logger.info(f"ранняя остановка: {patience} эпох без улучшения")
+            break
 
         # снимаем ПОСЛЕ сохранения чекпоинта: у снятого плеча всё равно должны
         # остаться его артефакты, иначе разбираться в причине будет не по чему
@@ -365,29 +400,44 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
         "config": str(cfg.get("_source", "")),
         "epochs_done": epoch + 1,
         "status": "killed" if gate_stop else "ok",
+        # чтобы в `board` цена прогона стояла рядом с его AIC: прирост, купленный
+        # выходом за лимит, виден сразу, а не после отдельного пересчёта
+        "budget": verdict.as_dict(),
     }
     if gate_stop:
         summary["killed_reason"] = f"гейт по эталону {reference.name} на эпохе {epoch}"
 
     if reference is not None and best_result is not None and not gate_stop:
-        comparison = compare_to_reference(
-            AICAccumulator.load(run_dir / "oof" / "val.npz"),
-            val_df["stem"].to_numpy(),
-            dict(cfg),
-            reference,
-            own_op=(best_result.mask_threshold, best_result.cls_threshold, best_result.min_area),
-            train_sigma=settings.train_sigma,
-            bootstrap_n=settings.bootstrap_n,
-            bootstrap_seed=settings.bootstrap_seed,
-        )
-        summary["verdict"] = comparison.as_dict()
-        for line in comparison.report(reference.name):
-            logger.info(line)
+        saved = AICAccumulator.load(run_dir / "oof" / "val.npz")
+        # Сопоставление идёт по stem'ам, а в аккумуляторе кадры лежат в порядке
+        # val_df. Усечённая валидация (train.max_val_steps) даёт кадров меньше,
+        # чем строк, и тогда индексы разъезжаются — считать вердикт по огрызку
+        # выборки всё равно нельзя, поэтому честнее сказать это вслух.
+        if len(saved) != len(val_df):
+            logger.info(
+                f"сравнение с эталоном пропущено: провалидировано {len(saved)} кадров "
+                f"из {len(val_df)} (train.max_val_steps)"
+            )
+        else:
+            comparison = compare_to_reference(
+                saved,
+                val_df["stem"].to_numpy(),
+                dict(cfg),
+                reference,
+                own_op=(best_result.mask_threshold, best_result.cls_threshold,
+                        best_result.min_area),
+                train_sigma=settings.train_sigma,
+                bootstrap_n=settings.bootstrap_n,
+                bootstrap_seed=settings.bootstrap_seed,
+            )
+            summary["verdict"] = comparison.as_dict()
+            for line in comparison.report(reference.name):
+                logger.info(line)
 
     (run_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     logger.log_hparams(flatten(dict(cfg)), {"best_aic": best})
-    logger.close()
     logger.info(f"готово. лучший AIC={best:.4f}. Всё в {run_dir}")
+    logger.close()
     return summary

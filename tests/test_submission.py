@@ -17,6 +17,7 @@ import pytest
 
 from experimental_tools_beliy_russak.imageio import imread, imwrite
 from experimental_tools_beliy_russak.submission import (
+    build_submission,
     load_test_table,
     pack_zip,
     validate_submission,
@@ -81,6 +82,84 @@ def write_submission(out_dir, root, sizes, *, values=255, area_rows=None,
         imwrite(out_dir / rel, mask)
     pd.DataFrame(rows).to_csv(out_dir / "submission.csv", index=False)
     return out_dir
+
+
+@pytest.fixture
+def checkpoint(tmp_path):
+    """Настоящий чекпоинт самой дешёвой модели репозитория, со случайными весами.
+
+    Качество здесь ни при чём: проверяется механика сборки, а веса нужны только
+    чтобы `load_checkpoint` отработал как на настоящем прогоне.
+    """
+    import torch
+
+    from experimental_tools_beliy_russak.config import load_config
+    from experimental_tools_beliy_russak.models import build_model
+
+    made: list[str] = []
+
+    def make(*overrides: str):
+        cfg = load_config("smoke", ["model.encoder_weights=null", *overrides])
+        run_dir = tmp_path / f"прогон{len(made)}"
+        made.append(run_dir.name)
+        (run_dir / "ckpt").mkdir(parents=True)
+        torch.save(
+            {"cfg": dict(cfg), "model": build_model(cfg.model).state_dict()},
+            run_dir / "ckpt" / "best.pt",
+        )
+        return run_dir
+
+    return make
+
+
+def build(run_dirs, out_dir, testset_root, **kwargs):
+    """Сборка на CPU: тесты не должны занимать карту."""
+    return build_submission(
+        run_dirs, out_dir,
+        test_csv=testset_root / "test.csv",
+        template=testset_root / "submission.csv",
+        device="cpu", num_workers=0, progress=lambda *_: None,
+        **kwargs,
+    )
+
+
+def test_build_submission_refuses_a_recipe_over_the_flops_budget(testset, tmp_path, checkpoint):
+    """Посылка вне лимита — ноль за весь этап, собирать её нельзя ни при каких пометках."""
+    root, _ = testset
+    run_dir = checkpoint("data.size=1024", "budget.exempt=true")
+
+    with pytest.raises(ValueError, match="GFLOPs"):
+        build([run_dir], tmp_path / "out", root)
+    assert not (tmp_path / "out" / "submission.csv").exists()
+
+
+def test_build_submission_counts_tta_views_against_the_budget(testset, tmp_path, checkpoint):
+    """Сам по себе конфиг влезает, а четыре вида TTA — уже нет."""
+    root, _ = testset
+    run_dir = checkpoint("data.size=512")
+
+    build([run_dir], tmp_path / "ok", root)
+    with pytest.raises(ValueError, match="GFLOPs"):
+        build([run_dir], tmp_path / "out", root, tta=("none", "hflip", "vflip", "hvflip"))
+
+
+def test_build_submission_counts_the_whole_ensemble(testset, tmp_path, checkpoint):
+    """Каждый прогон по отдельности в бюджете, а ансамбль из них — уже нет."""
+    root, _ = testset
+    first, second = checkpoint("data.size=576"), checkpoint("data.size=576")
+
+    build([first], tmp_path / "ok", root)
+    with pytest.raises(ValueError, match="GFLOPs"):
+        build([first, second], tmp_path / "out", root)
+
+
+def test_build_submission_reports_milliseconds_per_image(testset, tmp_path, checkpoint):
+    """Лимит 50 ms на кадр — число должно появляться само, а не по отдельной просьбе."""
+    root, _ = testset
+    stats = build([checkpoint()], tmp_path / "out", root)
+
+    assert stats["ms_per_image"] > 0
+    assert stats["n_images"] == 3
 
 
 def test_load_test_table_reuses_template_naming(testset):

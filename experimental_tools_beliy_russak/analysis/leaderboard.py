@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -28,6 +29,9 @@ def _read_run(run_dir: Path) -> dict | None:
     if summary_path.exists():
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         best = summary.get("best") or {}
+        # прогоны, посчитанные до появления гейта по FLOPs, бюджета не знают —
+        # у них тут остаётся пусто, и это честнее, чем подставить ноль
+        cost = summary.get("budget") or {}
         row.update({
             "best_aic": summary.get("best_aic"),
             "dice_pos": best.get("dice_pos"),
@@ -36,6 +40,10 @@ def _read_run(run_dir: Path) -> dict | None:
             "cls_thr": best.get("cls_threshold"),
             "min_area": best.get("min_area"),
             "epochs": summary.get("epochs_done"),
+            "gflops": cost.get("gflops"),
+            # именно «вне бюджета», а не «не помечен»: прогон с exempt всё равно
+            # вне лимита, и в таблице это должно быть видно
+            "over_budget": (not cost["within_limit"]) if "within_limit" in cost else None,
         })
     else:
         row["best_aic"] = None
@@ -75,9 +83,16 @@ def leaderboard(sort_by: str = "best_aic", only_diff: bool = True) -> pd.DataFra
             and len({str(cfg.get(k)) for cfg in configs}) > 1
         ]
 
+    # колонку зовём коротко, только если короткое имя ни с чем не сталкивается:
+    # у `loss.seg.bce` и `loss.area.small_seg.bce` последний кусок общий, и одна
+    # колонка молча показывала бы значение только второго из них
+    leaves = Counter(key.rsplit(".", 1)[-1] for key in keys)
+    labels = {key: (leaf if leaves[leaf] == 1 else key)
+              for key, leaf in ((k, k.rsplit(".", 1)[-1]) for k in keys)}
+
     for row, cfg in zip(rows, configs):
         for key in keys:
-            row[key.split(".")[-1] if key.count(".") else key] = cfg.get(key)
+            row[labels[key]] = cfg.get(key)
 
     table = pd.DataFrame(rows)
     if sort_by in table.columns:

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 
 from ..indexing import load_index
 from ..workspace import split_path

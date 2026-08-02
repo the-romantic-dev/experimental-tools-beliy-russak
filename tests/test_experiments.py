@@ -19,6 +19,7 @@ from experimental_tools_beliy_russak.datasets import build_balanced_sampler, val
 from experimental_tools_beliy_russak.engine import SCRATCH_MARKERS, _histograms, build_optimizer
 from experimental_tools_beliy_russak.inference import _to_original
 from experimental_tools_beliy_russak.losses import build_loss, soft_dice_loss
+from experimental_tools_beliy_russak.metrics import AICAccumulator
 from experimental_tools_beliy_russak.models import build_model
 from experimental_tools_beliy_russak.streams import BayarConv, InputFusion, ResidualExtractor, SRMConv, encoder_strides
 
@@ -239,6 +240,36 @@ def test_histograms_without_valid_region_use_whole_grid():
     probs = torch.zeros(2, 1, 10, 10)
     _, _, _, n_pixels = _histograms(probs, torch.zeros(2, 1, 10, 10), 32)
     assert list(n_pixels) == [100, 100]
+
+
+def test_histogram_counts_only_the_valid_region():
+    """Сумма гистограммы обязана равняться n_pixels: из неё считается ДОЛЯ
+    площади, и лишние пиксели паддинга в нулевом бине давали |P| больше кадра
+    на любом пороге ниже 1/n_bins."""
+    probs = torch.rand(3, 1, 40, 40)
+    masks = torch.zeros(3, 1, 40, 40)
+    valid_h = torch.tensor([40, 25, 10])
+    valid_w = torch.tensor([15, 40, 10])
+
+    hist_all, _, _, n_pixels = _histograms(probs, masks, 64, valid_h, valid_w)
+
+    assert list(hist_all.sum(axis=1)) == list(n_pixels)
+    assert (hist_all >= 0).all()
+
+
+def test_predicted_area_never_exceeds_the_frame_in_pad_mode():
+    """Порог 0 попадает в нулевой бин — тот самый, куда сваливался паддинг."""
+    probs = torch.full((1, 1, 30, 30), 0.9)
+    valid_h, valid_w = torch.tensor([30]), torch.tensor([10])
+
+    hist_all, hist_gt, gt_sum, n_pixels = _histograms(
+        probs, torch.zeros(1, 1, 30, 30), 32, valid_h, valid_w
+    )
+    accumulator = AICAccumulator(n_bins=32)
+    accumulator.update_hist(hist_all, hist_gt, gt_sum, n_pixels, np.array([1.0]))
+
+    predicted, _, _, pixels, _ = accumulator._tables()
+    assert (predicted[:, 0] / pixels[0] <= 1.0).all()
 
 
 # --- e2: профили лосса по площади ------------------------------------------

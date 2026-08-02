@@ -139,6 +139,48 @@ def test_preflight_catches_a_broken_config(tmp_path):
     assert "битый" in problems[0]
 
 
+def test_preflight_rejects_a_config_over_the_flops_budget(tmp_path):
+    """Прогон вне бюджета получил бы 0 за этап — тратить на него ночь незачем."""
+    path = _write_plan(tmp_path, {"runs": [
+        {"config": "smoke", "name": "ок"},
+        {"config": "smoke", "name": "жирный", "set": {"data.size": 1024}},
+    ]})
+    _, queue = load_plan(path)
+    problems = preflight(queue)
+
+    assert len(problems) == 1
+    assert "жирный" in problems[0]
+    assert "GFLOPs" in problems[0]
+    # отказ бесполезен без ответа на вопрос «а на чём тогда учить»
+    assert "px" in problems[0]
+
+
+def test_preflight_checks_the_budget_of_every_point_of_a_size_sweep(tmp_path):
+    """Дедупликация сборки моделей не должна прятать разницу в data.size.
+
+    Сеть у всех точек свипа одна, поэтому собирается она один раз — но стоимость
+    изображения у них разная, и проверять её надо у каждой.
+    """
+    path = _write_plan(tmp_path, {"runs": [{
+        "config": "smoke", "name": "свип", "grid": {"data.size": [256, 1024]},
+    }]})
+    _, queue = load_plan(path)
+    problems = preflight(queue)
+
+    assert len(problems) == 1
+    assert "size1024" in problems[0]
+
+
+def test_preflight_lets_an_exempt_config_through(tmp_path):
+    path = _write_plan(tmp_path, {"runs": [{
+        "config": "smoke", "name": "исследование",
+        "set": {"data.size": 1024, "budget.exempt": True,
+                "budget.exempt_reason": "проверка гипотезы, в сабмит не пойдёт"},
+    }]})
+    _, queue = load_plan(path)
+    assert preflight(queue) == []
+
+
 # --- прогон очереди ---------------------------------------------------------
 
 

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import cv2
@@ -55,8 +56,6 @@ def make_grid(
 
     calib_path = run_dir / "calib.json"
     if threshold is None:
-        import json
-
         threshold = (
             json.loads(calib_path.read_text(encoding="utf-8")).get("mask_threshold", 0.5)
             if calib_path.exists() else 0.5

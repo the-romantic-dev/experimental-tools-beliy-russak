@@ -172,10 +172,10 @@ class CombinedLoss(nn.Module):
 
         # pos_weight остаётся буфером, а не обычным параметром в _params:
         # только так он переезжает на device вместе с модулем. Пишется он и
-        # по-старому (`loss.pos_weight`), и по общему правилу (`loss.bce.pos_weight`)
-        pos_weight = cfg_loss.get("pos_weight") or self._params.get("bce", {}).pop(
-            "pos_weight", None
-        )
+        # по-старому (`loss.pos_weight`), и по общему правилу (`loss.bce.pos_weight`);
+        # из _params вынимается в любом случае, чтобы не уехать в компоненту дважды
+        nested = self._params.get("bce", {}).pop("pos_weight", None)
+        pos_weight = cfg_loss.get("pos_weight") or nested
         self.register_buffer(
             "pos_weight",
             torch.tensor([float(pos_weight)]) if pos_weight else None,
@@ -193,8 +193,8 @@ class CombinedLoss(nn.Module):
         logits = outputs["logits"]
         targets = batch["mask"].to(logits.device, dtype=logits.dtype)
 
-        names = sorted(set(self.weights) | set(self.small_weights))
-        components = {name: self._component(name, logits, targets) for name in names}
+        # _fns уже собран по объединению обычного и «мелкого» профилей
+        components = {name: self._component(name, logits, targets) for name in self._fns}
 
         if not self.use_area:
             total = sum(self.weights[name] * components[name].mean() for name in self.weights)

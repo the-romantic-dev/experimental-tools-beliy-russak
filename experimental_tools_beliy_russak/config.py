@@ -21,6 +21,20 @@ from .schema import check_config
 from .workspace import configs_root, project_root
 
 
+def get_path(node: Any, dotted: str, default: Any = None) -> Any:
+    """Значение по пути `a.b.c` в любом вложенном словаре; нет ключа — `default`.
+
+    Отдельной функцией, а не только методом `Cfg`: снапшот чужого прогона
+    приезжает из YAML обычным dict'ом, и оборачивать его ради одного чтения
+    (`stats.py` так и делает) незачем.
+    """
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return default
+        node = node[part]
+    return node
+
+
 class Cfg(dict):
     """dict с доступом через точку. Вложенные dict оборачиваются лениво."""
 
@@ -37,12 +51,7 @@ class Cfg(dict):
         self[name] = value
 
     def get_path(self, dotted: str, default: Any = None) -> Any:
-        node: Any = self
-        for part in dotted.split("."):
-            if not isinstance(node, dict) or part not in node:
-                return default
-            node = node[part]
-        return node
+        return get_path(self, dotted, default)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

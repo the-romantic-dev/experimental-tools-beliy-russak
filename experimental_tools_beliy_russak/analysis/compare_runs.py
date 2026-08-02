@@ -12,6 +12,7 @@ from typing import Sequence
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import yaml
 
 from ..metrics import DEFAULT_MASK_GRID, AICAccumulator
 from ..workspace import runs_root
@@ -55,12 +56,11 @@ def compare_table(runs: Sequence[str | Path]) -> pd.DataFrame:
         summary = load_summary(run_dir)
         best = summary.get("best") or {}
 
-        config = {}
         config_path = run_dir / "config.yaml"
-        if config_path.exists():
-            import yaml
-
-            config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        config = (
+            yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            if config_path.exists() else {}
+        )
 
         rows.append({
             "run": run_dir.name,

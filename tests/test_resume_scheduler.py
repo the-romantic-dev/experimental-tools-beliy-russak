@@ -12,6 +12,7 @@ from __future__ import annotations
 import experimental_tools_beliy_russak  # noqa: F401
 
 import pytest
+import torch
 import torch.nn as nn
 
 from experimental_tools_beliy_russak.engine import build_optimizer, build_scheduler
@@ -122,3 +123,28 @@ def test_run_without_scheduler_round_trips():
 
     model2, optimizer2, _ = make_run("none")
     assert _restore_state(state, model2, optimizer2, None, None) == (2, 0.5)
+
+
+def test_checkpoint_carries_the_gradient_scaler():
+    """Новый GradScaler стартует с масштаба 65536 — на порядки выше устоявшегося,
+    поэтому первые шаги после resume гарантированно переполнялись и пропускались."""
+    model, optimizer, scheduler = make_run()
+    scaler = torch.amp.GradScaler("cuda", init_scale=128.0, enabled=True)
+
+    state = _checkpoint_state(
+        model, None, optimizer, scheduler, {}, epoch=1, best=0.5, calib={}, scaler=scaler
+    )
+
+    restored = torch.amp.GradScaler("cuda", enabled=True)
+    _restore_state(state, *make_run(), None, restored)
+    assert restored.get_scale() == pytest.approx(128.0)
+
+
+def test_checkpoint_without_scaler_stays_readable():
+    """`amp: off` и старые чекпоинты — скалера в них нет, resume это переживает."""
+    model, optimizer, scheduler = make_run()
+    state = save(model, optimizer, scheduler)
+    assert state["scaler"] is None
+
+    disabled = torch.amp.GradScaler("cuda", enabled=False)
+    assert _restore_state(state, *make_run(), None, disabled) == (2, 0.5)

@@ -90,6 +90,38 @@ def test_miss_counts_frames_killed_by_the_gate(simple_run):
     assert float(gated.loc[1, "dice"]) < MISS_DICE
 
 
+def test_operating_point_includes_min_area_from_calib(tmp_path):
+    """Отчёт обязан считать AIC в той же точке, в которой отбиралась модель.
+    Раньше min_area из calib.json терялся, и «текущий» сценарий в `ceilings`
+    расходился с best_aic прогона ровно на вклад правила по площади."""
+    import json
+
+    side = 100
+    gt = np.zeros((side, side), dtype=np.float32)
+    prob = np.zeros((side, side), dtype=np.float32)
+    prob[:2] = 0.9                        # 2% кадра на негативе -> ложная тревога
+    run_dir = _make_run(tmp_path, probs=[prob], gts=[gt], cls_probs=[0.9], name="area")
+    (run_dir / "calib.json").write_text(
+        json.dumps({"mask_threshold": 0.5, "cls_threshold": 0.0, "min_area": 0.03}),
+        encoding="utf-8",
+    )
+
+    view = OofView(run_dir)
+    assert view.best_thresholds() == (0.5, 0.0, 0.03)
+    assert view.score(0.5, 0.0, 0.0)["fpr_neg"] == pytest.approx(1.0)
+    assert view.score(*view.best_thresholds())["fpr_neg"] == pytest.approx(0.0)
+
+
+def test_old_calib_without_min_area_still_reads(simple_run):
+    """Прогоны, посчитанные до появления ключа, не должны падать."""
+    import json
+
+    (simple_run / "calib.json").write_text(
+        json.dumps({"mask_threshold": 0.4, "cls_threshold": 0.1}), encoding="utf-8"
+    )
+    assert OofView(simple_run).best_thresholds() == (0.4, 0.1, 0.0)
+
+
 def test_ceilings_are_monotonic(simple_run):
     from experimental_tools_beliy_russak.analysis.oof_report import ceilings
 

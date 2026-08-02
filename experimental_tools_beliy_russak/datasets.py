@@ -17,6 +17,12 @@
 Второй сорт добавляется только в train и только из групп этого же фолда,
 поэтому валидация не протекает.
 
+Позитивы бывают тех же двух сортов: `data.synth` подмешивает в пул кадры,
+собранные из чистых оригиналов на лету (см. `synth.py`). Маска у них известна
+точно, а площадь вставки задаётся конфигом — это и есть способ дать модели
+столько мелких правок, сколько нужно, вместо перевзвешивания дефицитных
+настоящих. Синтетика тоже живёт только в train.
+
 `area` нужна лоссу: 22% позитивов имеют маску меньше 6% кадра, и именно на них
 приходится почти весь недобор Dice (у корзины <1% Dice 0.135 против 0.86+ у
 крупных). Профиль лосса и веса сэмплера по этой величине разводятся отдельно.
@@ -36,6 +42,7 @@ from torch.utils.data import Dataset, RandomSampler, WeightedRandomSampler
 
 from .geometry import mask_geometry
 from .imageio import imread
+from .synth import SynthSettings, needs_donor, pick_op, synthesize
 from .workspace import resolve
 from .precache import cached_path
 
@@ -49,6 +56,9 @@ class Record:
     is_negative: bool
     row_index: int
     area: float = 0.0  # доля кадра под GT-маской до аугментаций (из индекса)
+    #: кадр-основа для синтеза: `img_path` указывает на чистый оригинал, а
+    #: подделка и маска к нему делаются на лету в `__getitem__`
+    synth: bool = False
 
 
 def _read_image(path: Path) -> np.ndarray:
@@ -98,12 +108,16 @@ class SegDataset(Dataset):
         seed: int = 0,
         pad_mode: bool = False,
         aux_targets: bool = False,
+        synth: dict | SynthSettings | None = None,
     ) -> None:
         self.transform = transform
         self.source = source
         self.cache_size = cache_size
         self.gt_binarize = gt_binarize
         self.pad_mode = pad_mode
+        self.synth = synth if isinstance(synth, SynthSettings) else SynthSettings.from_config(synth)
+        self.synth_bases: list[str] = []
+        self._synth_rng: np.random.Generator | None = None
         # геометрия считается только когда её кто-то просит: connectedComponents
         # на маске 768x768 стоит ~1.5 мс, и платить их зря на каждом сэмпле
         # незачем
@@ -123,17 +137,74 @@ class SegDataset(Dataset):
         if extra_negatives > 0 and "orgl_path" in self.df.columns:
             self.records += self._sample_originals(extra_negatives, seed)
 
+        if self.synth is not None:
+            self.records += self._sample_synthetic(seed)
+
         self.is_negative = np.array([r.is_negative for r in self.records], dtype=bool)
         self.area = np.array([r.area for r in self.records], dtype=np.float32)
 
+    def _originals(self) -> list[str]:
+        if "orgl_path" not in self.df.columns:
+            return []
+        return [str(p) for p in self.df["orgl_path"].dropna().unique().tolist()]
+
     def _sample_originals(self, fraction: float, seed: int) -> list[Record]:
-        originals = self.df["orgl_path"].dropna().unique().tolist()
+        originals = self._originals()
         if not originals:
             return []
         n = int(round(len(self.df) * fraction))
         rng = np.random.default_rng(seed)
         chosen = rng.choice(originals, size=min(n, len(originals)), replace=False)
         return [Record(str(p), None, True, -1, 0.0) for p in chosen]
+
+    def _sample_synthetic(self, seed: int) -> list[Record]:
+        """Кадры-основы под синтез: столько, чтобы их доля среди позитивов была
+        ровно `synth.fraction`.
+
+        Основы берутся с возвращением: один и тот же оригинал даёт каждый раз
+        другую подделку, поэтому повтор пути — не повтор примера. Доля считается
+        от НАСТОЯЩИХ позитивов, уже лежащих в пуле.
+        """
+        originals = self._originals()
+        if not originals:
+            raise ValueError(
+                "data.synth включён, но в индексе нет ни одного `orgl_path` — "
+                "синтезировать подделки не из чего"
+            )
+        self.synth_bases = originals
+
+        n_positive = sum(1 for record in self.records if not record.is_negative)
+        fraction = self.synth.fraction
+        n_synth = int(round(n_positive * fraction / (1.0 - fraction)))
+        if n_synth <= 0:
+            return []
+
+        rng = np.random.default_rng(seed + 1)
+        chosen = rng.choice(originals, size=n_synth, replace=True)
+        # площадь для сэмплера — геометрическая середина заказанного диапазона:
+        # настоящей она станет только после розыгрыша в `__getitem__`
+        area = float(np.sqrt(self.synth.area_range[0] * self.synth.area_range[1]))
+        return [Record(str(p), None, False, -1, area, synth=True) for p in chosen]
+
+    def _rng(self) -> np.random.Generator:
+        """Генератор синтеза — ленивый и свой у каждого воркера DataLoader.
+
+        Сид берётся из глобального numpy-RNG, а его torch засевает в каждом
+        воркере от base_seed прогона. Поэтому поток воспроизводим по `seed`
+        конфига, но разный между воркерами: иначе все они лепили бы на одном
+        шаге одинаковые подделки.
+        """
+        if self._synth_rng is None:
+            self._synth_rng = np.random.default_rng(int(np.random.randint(0, 2 ** 31 - 1)))
+        return self._synth_rng
+
+    def _synthesize(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        rng = self._rng()
+        op = pick_op(rng, self.synth)
+        donor = None
+        if needs_donor(op):
+            donor = _read_image(self._resolve(str(rng.choice(self.synth_bases)), False))
+        return synthesize(image, rng, self.synth, op=op, donor=donor)
 
     def _resolve(self, rel_path: str, is_mask: bool) -> Path:
         if self.source == "cache":
@@ -150,7 +221,9 @@ class SegDataset(Dataset):
         image = _read_image(self._resolve(record.img_path, False))
         h, w = image.shape[:2]
 
-        if record.gt_path is None:
+        if record.synth:
+            image, mask = self._synthesize(image)
+        elif record.gt_path is None:
             mask = np.zeros((h, w), dtype=np.float32)
         else:
             mask = _read_mask(self._resolve(record.gt_path, True), (h, w)).astype(np.float32) / 255.0

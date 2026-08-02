@@ -9,6 +9,7 @@
     aic precache --max-side 768  ресайз-кэш для быстрых эпох
     aic profile                  что вообще лежит в данных
     aic smoke                    весь пайплайн на 200 картинках
+    aic budget --fit             GFLOPs на кадр против лимита регламента
     aic train -c unet_convnext_512 -s train.lr=3e-4
     aic calibrate runs/<name>    подобрать пороги по OOF
     aic eval runs/<name>         честная метрика в полном разрешении
@@ -30,7 +31,7 @@ from typing import List, Optional
 import typer
 
 from .workspace import (
-    ensure_dirs, index_path, runs_root, split_path, submission_template,
+    configs_root, ensure_dirs, index_path, runs_root, split_path, submission_template,
     submissions_root, test_csv as workspace_test_csv, workspace,
 )
 
@@ -319,6 +320,67 @@ def probe(
 
 
 @app.command()
+def budget(
+    configs: List[str] = typer.Argument(None, help="имена конфигов; без аргументов — все из configs/"),
+    tta: str = typer.Option("none", help="рецепт TTA, как в eval/submit: none | hflip,vflip"),
+    models: int = typer.Option(1, help="сколько моделей в ансамбле"),
+    fit: bool = typer.Option(False, "--fit", help="дописать, какой вход ещё влезает"),
+    weights: bool = typer.Option(False, "--weights", help="показать источники предобученных весов"),
+) -> None:
+    """Сколько строгих GFLOPs стоит одно изображение и влезает ли это в лимит.
+
+    Лимит регламента — 100 GFLOPs, причём на ИЗОБРАЖЕНИЕ, а не на forward:
+    `--tta hflip,vflip` удваивает счёт, ансамбль из двух прогонов удваивает ещё
+    раз. Считает `torch.utils.flop_counter.FlopCounterMode` — тот самый счётчик,
+    который регламент называет источником правды в спорных случаях. Карта не
+    нужна: forward идёт на meta-устройстве.
+    """
+    from .budget import LIMIT_GFLOPS, check, largest_fitting_size
+    from .compliance import pretrained_sources
+    from .config import load_config
+
+    names = list(configs) if configs else sorted(
+        p.stem for p in configs_root().glob("*.yaml") if not p.name.startswith("_")
+    )
+    views = len([part for part in tta.split(",") if part.strip()]) or 1
+    recipe = f"{views} вид(ов) TTA x {models} модель(ей)" if views > 1 or models > 1 else "один forward"
+    typer.echo(f"лимит {LIMIT_GFLOPS:.0f} строгих GFLOPs на изображение; рецепт: {recipe}\n")
+
+    over = 0
+    for name in names:
+        try:
+            cfg = load_config(name)
+            verdict = check(cfg, n_views=views, n_models=models)
+        except Exception as error:  # noqa: BLE001 — конфиг соседа не должен ронять таблицу
+            typer.secho(f"{name:24s} не собрался: {type(error).__name__}: {error}", fg="red")
+            continue
+
+        note = "в бюджете" if verdict.within_limit else f"ВНЕ, x{verdict.gflops / verdict.limit:.2f}"
+        if verdict.exempt:
+            note += " (помечен exempt)"
+        if fit and not verdict.within_limit:
+            side = largest_fitting_size(cfg, n_views=views, n_models=models)
+            note += f"; влезает {side}px" if side else "; не влезает ни на каком входе"
+
+        over += not verdict.within_limit
+        typer.secho(
+            f"{name:24s} {verdict.size:>4d}px {verdict.gflops:>8.1f}  {note}",
+            fg="green" if verdict.within_limit else "red",
+        )
+        if weights:
+            sources = pretrained_sources(cfg.model) or ["с нуля, внешних весов нет"]
+            for source in sources:
+                typer.echo(f"{'':24s}      веса: {source}")
+
+    if over:
+        typer.secho(
+            f"\nвне бюджета: {over} из {len(names)}. Такой прогон получит 0 за этап; "
+            "если он исследовательский — пометь его `budget.exempt: true`",
+            fg="yellow",
+        )
+
+
+@app.command()
 def smoke(
     config: str = typer.Option("smoke", "--config", "-c"),
     set_: List[str] = typer.Option([], "--set", "-s"),
@@ -367,8 +429,8 @@ def eval(
     """Честная метрика в ИСХОДНОМ разрешении (в train.py она считается на сетке модели)."""
     import pandas as pd
 
-    from .calibrate import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID
     from .inference import evaluate_full_res
+    from .metrics import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID
 
     run_dir = Path(run_dir)
     ckpt = Path(checkpoint) if checkpoint.endswith(".pt") else run_dir / "ckpt" / f"{checkpoint}.pt"
@@ -592,18 +654,17 @@ def history(
     from .analysis.compare_runs import DEFAULT_PANELS, compare_table, plot_history
 
     runs_dir = runs_root()
-    selected = list(runs) if runs else sorted(
-        d.name for d in runs_dir.iterdir()
-        if d.is_dir() and (d / "metrics.jsonl").exists()
-    )
+    requested = list(runs) if runs else sorted(d.name for d in runs_dir.iterdir() if d.is_dir())
+
+    selected = []
+    for name in requested:
+        if (runs_dir / name / "metrics.jsonl").exists():
+            selected.append(name)
+        elif runs:  # молчим только про чужие папки в runs/, но не про то, что попросили явно
+            typer.secho(f"пропускаю {name}: нет metrics.jsonl", fg="yellow")
     if not selected:
         typer.secho("не нашёл ни одного прогона с metrics.jsonl", fg="yellow")
         raise typer.Exit(code=1)
-
-    skipped = [r for r in selected if not (runs_dir / r / "metrics.jsonl").exists()]
-    selected = [r for r in selected if r not in skipped]
-    for name in skipped:
-        typer.secho(f"пропускаю {name}: нет metrics.jsonl", fg="yellow")
 
     panels = [p.strip() for p in metrics.split(",")] if metrics else list(DEFAULT_PANELS)
     figure = plot_history(selected, panels)

@@ -24,7 +24,7 @@ from .utils import AverageMeter, format_seconds
 _NON_TARGET = {"image", "index", "orig_h", "orig_w", "valid_h", "valid_w", "name"}
 
 
-def _TARGET_KEYS(batch: dict) -> list[str]:
+def _target_keys(batch: dict) -> list[str]:
     """Поля батча, которые надо перенести на device.
 
     Список раньше был захардкожен ("mask", "label", "area"), и любая новая цель
@@ -86,19 +86,25 @@ def _histograms(
         )
     idx = (flat * n_bins).long().clamp_(min=0, max=n_bins - 1)
     offsets = torch.arange(batch, device=idx.device).unsqueeze(1) * n_bins
-    shifted = (idx + offsets).reshape(-1)
+    shifted = idx + offsets
 
-    hist_all = torch.bincount(shifted, minlength=batch * n_bins).reshape(batch, n_bins)
+    hist_all = torch.bincount(shifted.reshape(-1), minlength=batch * n_bins)
     gt_flat = masks.reshape(batch, -1) > 0.5
-    hist_gt = torch.bincount(
-        (idx + offsets)[gt_flat], minlength=batch * n_bins
-    ).reshape(batch, n_bins)
+    hist_gt = torch.bincount(shifted[gt_flat], minlength=batch * n_bins)
+
+    n_pixels = np.asarray(n_pixels, dtype=np.int64)
+    counts = hist_all.reshape(batch, n_bins).cpu().numpy()
+    # Обнулённый выше паддинг осел в нулевом бине, а в знаменателе площади его
+    # нет. Без этой поправки рушится инвариант «сумма гистограммы = n_pixels»:
+    # на порогах ниже 1/n_bins доля предсказанной площади выходила больше
+    # единицы, и правило FPR («площадь >= 1% кадра») срабатывало на пустоте.
+    counts[:, 0] -= height * width - n_pixels
 
     return (
-        hist_all.cpu().numpy(),
-        hist_gt.cpu().numpy(),
+        counts,
+        hist_gt.reshape(batch, n_bins).cpu().numpy(),
         gt_flat.sum(dim=1).cpu().numpy(),
-        np.asarray(n_pixels, dtype=np.int64),
+        n_pixels,
     )
 
 
@@ -220,7 +226,7 @@ def train_one_epoch(
             break
 
         images = batch["image"].to(device, non_blocking=True, memory_format=torch.channels_last)
-        for key in _TARGET_KEYS(batch):
+        for key in _target_keys(batch):
             batch[key] = batch[key].to(device, non_blocking=True)
 
         with torch.amp.autocast("cuda", dtype=dtype, enabled=dtype is not None):
@@ -323,7 +329,7 @@ def validate(
         images = batch["image"].to(device, non_blocking=True, memory_format=torch.channels_last)
         masks = batch["mask"].to(device, non_blocking=True)
         batch["mask"] = masks
-        for key in _TARGET_KEYS(batch):
+        for key in _target_keys(batch):
             if key != "mask":  # маску уже перенесли выше
                 batch[key] = batch[key].to(device, non_blocking=True)
 
@@ -347,7 +353,7 @@ def validate(
 # Модули, которые лежат ВНУТРИ энкодера, но обучаются с нуля: пониженный
 # encoder_lr для них — это не бережное отношение к предобученным весам,
 # а просто медленное обучение случайной инициализации.
-SCRATCH_MARKERS = ("aux_stream", "projections", "gates", "fusion")
+SCRATCH_MARKERS = ("aux_stream", "projections", "gates", "fusion", "skip_norms")
 
 
 @register_optimizer("adamw")

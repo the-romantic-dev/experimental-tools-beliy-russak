@@ -8,9 +8,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence
+from typing import Iterator, Sequence
 
-import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -54,7 +53,10 @@ def _forward_tta(model, images: torch.Tensor, tta: Sequence[str], amp: str):
     prob_sum, cls_sum = None, None
     for op_name in tta:
         forward_op, inverse_op = TTA_OPS[op_name]
-        with torch.amp.autocast("cuda", dtype=dtype, enabled=dtype is not None):
+        # autocast("cuda") на CPU-тензорах не даёт ничего, кроме предупреждения:
+        # смешанная точность есть только на карте
+        with torch.amp.autocast("cuda", dtype=dtype,
+                                enabled=dtype is not None and images.is_cuda):
             outputs = model(forward_op(images))
         probs = torch.sigmoid(inverse_op(outputs["logits"]).float())
         cls = torch.sigmoid(outputs["cls_logits"].float()).reshape(-1)
@@ -206,8 +208,11 @@ def evaluate_full_res(
 
     dataset = SegDataset(
         df, build_transform(cfg.data, train=False),
-        source=cfg.data.get("source", "raw"),
-        cache_size=int(cfg.data.get("cache_size", 768)),
+        # Именно raw, даже если прогон учился с `data.source: cache`. Кадры в кэше
+        # ужаты до cache_size, и «исходным разрешением» тут оказалось бы разрешение
+        # кэша: маска возвращалась бы к нему, GT ужимался бы под неё, и вся затея
+        # с честной сверкой перед сабмитом мерила бы не то, что уйдёт в сабмит.
+        source="raw",
         gt_binarize=cfg.data.get("gt_binarize", 0.5),
         extra_negatives=0.0,
     )

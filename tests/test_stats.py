@@ -344,6 +344,46 @@ def test_compare_refuses_when_budgets_diverged(tmp_path):
     assert any("НЕСОПОСТАВИМО" in line for line in got.report("эталон"))
 
 
+def test_load_reference_leaves_the_curve_empty_without_epoch_size(tmp_path):
+    """Кривая живёт в ЧИСЛЕ ПОКАЗОВ, а его даёт только data.epoch_size. Раньше
+    без него все точки ложились в ноль и гейт молча выключался на весь прогон —
+    пустая кривая означает то же самое, но об этом можно сказать вслух."""
+    accumulator = make_accumulator(seed=11)
+    stems = [f"кадр{i}" for i in range(len(accumulator))]
+    cfg = base_cfg()
+    cfg["data"].pop("epoch_size")
+    run_dir = write_run(tmp_path, "эталон", accumulator, stems, cfg, [0.3, 0.5, 0.65])
+
+    reference = load_reference(run_dir)
+
+    assert len(reference.curve[0]) == 0
+    assert gate_check(reference.curve, 24000, 0.5, gate_delta=-0.05, after_samples=0).fired is False
+
+
+def test_load_reference_refuses_when_rows_and_histograms_disagree(tmp_path):
+    """Величины берутся из аккумулятора по позициям val_rows: разъедься длины —
+    сравнивались бы разные кадры, и вердикт был бы про случайную пару."""
+    accumulator = make_accumulator(seed=12)
+    stems = [f"кадр{i}" for i in range(len(accumulator) - 3)]
+    run_dir = write_run(tmp_path, "эталон", accumulator, stems, base_cfg(), [0.3, 0.5, 0.65])
+
+    with pytest.raises(ValueError, match="val_rows"):
+        load_reference(run_dir)
+
+
+def test_compare_refuses_when_stems_do_not_cover_the_accumulator(tmp_path):
+    accumulator = make_accumulator(seed=13)
+    stems = [f"кадр{i}" for i in range(len(accumulator))]
+    run_dir = write_run(tmp_path, "эталон", accumulator, stems, base_cfg(), [0.3, 0.5, 0.65])
+    reference = load_reference(run_dir)
+
+    with pytest.raises(ValueError, match="stem"):
+        compare_to_reference(
+            accumulator, stems[:-2], base_cfg(), reference,
+            own_op=reference.op, train_sigma=0.008, bootstrap_n=50, bootstrap_seed=0,
+        )
+
+
 def test_stats_block_is_known_to_the_schema():
     """Иначе проверка опечаток заругается на весь новый блок."""
     cfg = {"stats": {

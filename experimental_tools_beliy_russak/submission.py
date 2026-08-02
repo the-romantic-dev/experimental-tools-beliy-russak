@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 import zipfile
 from pathlib import Path
 from typing import Sequence
@@ -33,6 +34,7 @@ import torch
 from PIL import Image
 from torch.utils.data import DataLoader
 
+from . import budget
 from .datasets import PredictDataset
 from .imageio import imwrite
 from .inference import load_checkpoint, postprocess, predict_stream
@@ -148,6 +150,7 @@ def build_submission(
     num_workers: int = 6,
     limit: int | None = None,
     use_ema: bool = True,
+    device: str | torch.device | None = None,
     progress=print,
 ) -> dict:
     run_dirs = [Path(r) for r in run_dirs]
@@ -156,8 +159,8 @@ def build_submission(
     if limit:
         table = table.head(limit).copy()
 
-    device = pick_device("auto")
-    models, sizes, val_modes, amps = [], set(), set(), set()
+    device = pick_device("auto") if device is None else torch.device(device)
+    models, cfgs, sizes, val_modes, amps = [], [], set(), set(), set()
     for run_dir in run_dirs:
         ckpt = Path(checkpoint) if str(checkpoint).endswith(".pt") \
             else run_dir / "ckpt" / f"{checkpoint}.pt"
@@ -165,6 +168,7 @@ def build_submission(
             raise FileNotFoundError(f"нет чекпоинта {ckpt}")
         model, cfg, _ = load_checkpoint(ckpt, device, use_ema=use_ema)
         models.append(model)
+        cfgs.append(cfg)
         sizes.add(int(cfg.data.get("size", 512)))
         val_modes.add(str(cfg.data.get("val_mode", "resize")))
         amps.add(str(cfg.train.get("amp", "fp16")))
@@ -175,6 +179,21 @@ def build_submission(
             f"модели ансамбля требуют одинакового входа, а тут size={sorted(sizes)} "
             f"val_mode={sorted(val_modes)}. Собери сабмиты по отдельности."
         )
+    # amp у моделей ансамбля может отличаться: он меняет только точность
+    # вычисления forward, а не форму входа, так что берём любой
+    size, val_mode, amp = sizes.pop(), val_modes.pop(), amps.pop()
+
+    # Бюджет вычислений — до первого кадра. Считается настоящий рецепт: столько
+    # моделей, сколько в ансамбле, столько видов, сколько задано в TTA. Пометка
+    # `budget.exempt`, которой разрешён исследовательский прогон, здесь не
+    # действует: посылка вне лимита это ноль за весь этап.
+    verdict = budget.check_submission(cfgs, n_views=len(tuple(tta)))
+    if not verdict.ok:
+        raise ValueError(
+            f"сабмит не укладывается в бюджет: {verdict.text}. "
+            "Уменьшай вход, убирай TTA или собирай прогоны по отдельности"
+        )
+    progress(f"бюджет: {verdict.text}")
 
     thresholds, notes = _resolve_thresholds(run_dirs, mask_threshold, cls_threshold, min_area)
     for note in notes:
@@ -182,10 +201,10 @@ def build_submission(
     progress(f"пороги: {thresholds}")
 
     paths = [root / p for p in table["img_path"]]
-    transform = build_transform({"size": sizes.pop(), "val_mode": next(iter(val_modes))}, train=False)
+    transform = build_transform({"size": size, "val_mode": val_mode}, train=False)
     loader = DataLoader(
         PredictDataset(paths, transform), batch_size=batch_size,
-        shuffle=False, num_workers=num_workers, pin_memory=True,
+        shuffle=False, num_workers=num_workers, pin_memory=device.type == "cuda",
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -195,10 +214,8 @@ def build_submission(
     areas = np.zeros(len(table), dtype=np.float64)
     cls_probs = np.zeros(len(table), dtype=np.float64)
     done = 0
-    for item in predict_stream(
-        models, loader, device, tta=tuple(tta),
-        amp=next(iter(amps)), val_mode=next(iter(val_modes)),
-    ):
+    started = time.perf_counter()
+    for item in predict_stream(models, loader, device, tta=tuple(tta), amp=amp, val_mode=val_mode):
         idx = item["index"]
         mask = postprocess(item["prob"], item["cls_prob"], **thresholds)
         imwrite(out_dir / table["prediction_path"].iloc[idx], mask)
@@ -207,6 +224,7 @@ def build_submission(
         done += 1
         if done % 250 == 0:
             progress(f"  {done}/{len(table)}")
+    elapsed = time.perf_counter() - started
 
     table.to_csv(out_dir / "submission.csv", index=False)
 
@@ -215,6 +233,13 @@ def build_submission(
     stats = {
         "n_images": len(table),
         "n_models": len(models),
+        "gflops_per_image": round(verdict.gflops, 1),
+        # Регламент даёт 50 ms на кадр на H100. Здесь это не доказательство, а
+        # единственный доступный сигнал: считается весь путь от чтения файла до
+        # записи PNG, на том железе, где собирали. Батч и число воркеров на
+        # число влияют, поэтому сравнивать его имеет смысл только с самим собой.
+        "ms_per_image": round(1000 * elapsed / max(1, len(table)), 1),
+        "device": str(device),
         "thresholds": thresholds,
         "empty_masks": int((~non_empty).sum()),
         "empty_share": round(float((~non_empty).mean()), 4),

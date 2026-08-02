@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from .config import get_path as _get_path
 from .metrics import (
     DEFAULT_AREA_GRID,
     DEFAULT_CLS_GRID,
@@ -165,21 +166,16 @@ BUDGET_KEYS = (
     "data.size",
     "data.epoch_size",
     "data.val_frac",
+    # val_limit и val_keep_negatives задают состав валидации наравне с val_frac:
+    # разойдясь по ним, два прогона меряются на разных наборах кадров
+    "data.val_limit",
+    "data.val_keep_negatives",
     "data.val_seed",
     "train.epochs",
     "train.bs",
     "train.accum_steps",
     "train.fold",
 )
-
-
-def _get_path(node, dotted: str):
-    """Значение по пути `a.b.c`; отсутствующий ключ — None."""
-    for part in dotted.split("."):
-        if not isinstance(node, dict) or part not in node:
-            return None
-        node = node[part]
-    return node
 
 
 def comparable(cfg: dict, cfg_ref: dict, keys=BUDGET_KEYS) -> tuple[bool, list[str]]:
@@ -354,15 +350,29 @@ def load_reference(run_dir) -> Reference:
         )
         op = (best.mask_threshold, best.cls_threshold, best.min_area)
 
+    if len(stems) != len(accumulator):
+        raise ValueError(
+            f"{run_dir.name}: в val.npz {len(accumulator)} кадров, а в val_rows.parquet "
+            f"{len(stems)} строк. Сопоставление идёт по stem'ам в порядке этих строк, "
+            "и на разной длине оно молча смешало бы разные кадры"
+        )
+
+    # Ось кривой — ЧИСЛО ПОКАЗОВ, а его даёт только data.epoch_size. Без него все
+    # точки легли бы в ноль и `gate_check` на каждой эпохе отвечал бы «вне кривой»,
+    # то есть гейт молча выключался бы на весь прогон. Пустая кривая означает ровно
+    # то же самое, но об этом хотя бы можно сказать вслух один раз на старте.
     epoch_size = int(_get_path(cfg, "data.epoch_size") or 0)
-    rows = [
-        json.loads(line)
-        for line in (run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    rows = [r for r in rows if "val/aic_tuned" in r]
-    xs = np.array([(int(r["step"]) + 1) * epoch_size for r in rows], dtype=float)
-    ys = np.array([float(r["val/aic_tuned"]) for r in rows], dtype=float)
+    if epoch_size > 0:
+        rows = [
+            json.loads(line)
+            for line in (run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        rows = [r for r in rows if "val/aic_tuned" in r]
+        xs = np.array([(int(r["step"]) + 1) * epoch_size for r in rows], dtype=float)
+        ys = np.array([float(r["val/aic_tuned"]) for r in rows], dtype=float)
+    else:
+        xs = ys = np.zeros(0, dtype=float)
 
     return Reference(run_dir.name, accumulator, stems, op, cfg, (xs, ys))
 
@@ -450,6 +460,12 @@ def compare_to_reference(
 ) -> Comparison:
     """Собрать финальное сравнение: дельты, интервал, вердикт."""
     stems = np.asarray(stems)
+    if stems.size != len(accumulator):
+        raise ValueError(
+            f"кадров в аккумуляторе {len(accumulator)}, а stem'ов {stems.size}. "
+            "Индексы совпадения ищутся по stem'ам, а величины берутся по тем же "
+            "позициям в аккумуляторе — на разной длине сравнивались бы разные кадры"
+        )
     idx_self, idx_ref = align_by_stem(stems, reference.stems)
 
     def cut(sample: PerImage, idx: np.ndarray) -> PerImage:

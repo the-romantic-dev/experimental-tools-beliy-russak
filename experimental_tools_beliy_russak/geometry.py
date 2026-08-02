@@ -92,8 +92,6 @@ def mask_geometry(mask: torch.Tensor, valid_h: int, valid_w: int) -> dict[str, t
         binary[0].any() or binary[-1].any() or binary[:, 0].any() or binary[:, -1].any()
     )
 
-    rows = binary.any(dim=1).nonzero().float()
-    cols = binary.any(dim=0).nonzero().float()
     ys, xs = binary.nonzero(as_tuple=True)
     centre_y = float(ys.float().mean()) / max(valid_h - 1, 1)
     centre_x = float(xs.float().mean()) / max(valid_w - 1, 1)
@@ -101,7 +99,6 @@ def mask_geometry(mask: torch.Tensor, valid_h: int, valid_w: int) -> dict[str, t
     plane = binary.to(torch.uint8).cpu().numpy()
     n_components = int(cv2.connectedComponents(plane, connectivity=8)[0]) - 1
 
-    del rows, cols
     return {
         "area": torch.tensor([total / float(binary.numel())], dtype=torch.float32),
         "border": torch.tensor([float(touches)], dtype=torch.float32),

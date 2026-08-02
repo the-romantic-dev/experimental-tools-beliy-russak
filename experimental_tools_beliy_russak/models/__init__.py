@@ -29,7 +29,7 @@ import torch.nn.functional as F
 
 from ..registry import BACKENDS, register_backend
 from ..streams import GatedDualEncoder, InputFusion, NoiseBranch, encoder_strides
-from .aux_heads import AUX_HEADS, build_aux_heads, parse_aux_spec
+from .aux_heads import build_aux_heads, parse_aux_spec
 
 
 def _stream_kinds(name: str) -> tuple[str, ...]:
@@ -281,6 +281,11 @@ def _build_smp(cfg: dict) -> tuple[nn.Module, str, nn.Module | None]:
     elif kinds and fuse != "input":
         raise ValueError(f"неизвестный способ фьюза: {fuse}; есть input|gate")
 
+    # нормировка скипов навешивается ПОСЛЕ гейт-фьюза: она должна видеть уже
+    # собранную пирамиду, а не только основной энкодер
+    if cfg.get("skip_norm", False):
+        core.encoder = SkipNormEncoder(core.encoder)
+
     if cfg.get("fp32_decoder_stem", True):
         _protect_decoder_stem(core)
 
@@ -313,6 +318,58 @@ def _protect_decoder_stem(core: nn.Module) -> None:
     blocks = getattr(getattr(core, "decoder", None), "blocks", None)
     if blocks:
         force_fp32(blocks[0].conv1)
+
+
+class SkipNormEncoder(nn.Module):
+    """Энкодер, у которого каждая фича пирамиды нормируется перед декодером.
+
+    Зачем. timm отдаёт `features_only` без финальной нормы на всех стадиях,
+    кроме последней: у tu-convnext_tiny на реальных кадрах глубокая фича идёт
+    с RMS 1.03, а skip в первый блок декодера — с RMS 22.95 и выбросами за 1000
+    (замер на f0-control-768 после 6 эпох; до обучения было 12.35 и 700, то есть
+    поток ещё и дрейфует вверх по ходу обучения). Остаточный поток ConvNeXt
+    между стадиями не нормируется вообще — LayerNorm живёт ВНУТРИ блока, — а
+    weight decay штрафует веса, а не магнитуду активаций.
+
+    Что из этого следует. В конкатенации на входе `decoder.blocks.0.conv1` скип
+    даёт 79.5% энергии выхода против 20.5% у глубокой фичи: блок, который по
+    замыслу вливает семантику, на четыре пятых состоит из скипа. Плюс ровно этот
+    дрейф уводил свёртку в потолок fp16 на 13-й эпохе long_baseline_768
+    (running_var 1.16e8 против 1209 у f0).
+
+    Почему GroupNorm(1, C), а не LayerNorm2d из timm. LayerNorm2d нормирует
+    только по каналам, отдельно в каждой точке — это стирает разницу масштабов
+    между участками кадра, а для forensic-задачи «здесь отклик сильнее» само по
+    себе признак. GroupNorm с одной группой нормирует по (C, H, W) целиком:
+    убирает общий сдвиг и масштаб карты, а пространственный контраст оставляет.
+
+    Ранние стадии (индексы 0 и 1) пропускаются по той же причине, что и в
+    `GatedDualEncoder`: нулевой индекс — это сам вход, а у части энкодеров
+    ранние уровни пустые.
+    """
+
+    def __init__(self, encoder: nn.Module, from_stage: int = 2) -> None:
+        super().__init__()
+        self.encoder = encoder
+        self.out_channels = list(encoder.out_channels)
+        self.output_stride = getattr(encoder, "output_stride", 32)
+
+        self.norm_index = [
+            i for i, ch in enumerate(self.out_channels) if ch > 0 and i >= from_stage
+        ]
+        if not self.norm_index:
+            raise ValueError("у энкодера нет стадий, пригодных для нормировки скипов")
+        # имя `skip_norms` перечислено в SCRATCH_MARKERS: модуль лежит внутри
+        # энкодера, но учится с нуля, и пониженный encoder_lr ему не нужен
+        self.skip_norms = nn.ModuleList(
+            [nn.GroupNorm(1, self.out_channels[i]) for i in self.norm_index]
+        )
+
+    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+        features = list(self.encoder(x))
+        for slot, index in enumerate(self.norm_index):
+            features[index] = self.skip_norms[slot](features[index])
+        return features
 
 
 def _wrap_gated(encoder: nn.Module, kinds: tuple[str, ...], width: int) -> GatedDualEncoder:

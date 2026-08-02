@@ -16,17 +16,25 @@ from .config import Cfg
 from .engine import build_optimizer
 from .losses import build_loss
 from .models import build_model, count_parameters
+from .models.aux_heads import parse_aux_spec
 from .utils import ModelEma, pick_device
 
 
 def _fake_batch(batch_size: int, size: int, device: torch.device) -> dict:
     """Батч той же формы, что отдаёт SegDataset, но из шума."""
     mask = (torch.rand(batch_size, 1, size, size, device=device) > 0.85).float()
+    label = (mask.flatten(1).amax(dim=1, keepdim=True) > 0).float()
     return {
         "image": torch.randn(batch_size, 3, size, size, device=device),
         "mask": mask,
-        "label": (mask.flatten(1).amax(dim=1, keepdim=True) > 0).float(),
+        "label": label,
         "area": mask.flatten(1).mean(dim=1, keepdim=True),
+        # цели aux-голов кладём всегда: лосс возьмёт только включённые конфигом,
+        # а без них головы выпадали бы из графа и замер не увидел бы их части
+        "aux_border": (torch.rand(batch_size, 1, device=device) > 0.5).float(),
+        "aux_centroid": torch.rand(batch_size, 2, device=device),
+        "aux_components": torch.rand(batch_size, 1, device=device),
+        "geom_valid": label,
     }
 
 
@@ -46,7 +54,9 @@ def probe_memory(cfg: Cfg, steps: int = 3, include_ema: bool | None = None) -> d
 
     model = build_model(cfg.model).to(device, memory_format=torch.channels_last)
     params = count_parameters(model)
-    criterion = build_loss(cfg.loss).to(device)
+    # aux-веса те же, что в train: иначе лосс не трогал бы выходы голов, и замер
+    # молчал бы про их часть графа — а модель их всё равно считает
+    criterion = build_loss(cfg.loss, parse_aux_spec(cfg.model.get("aux_heads"))).to(device)
     optimizer = build_optimizer(model, cfg.train)
     scaler = torch.amp.GradScaler("cuda", enabled=(amp == "fp16"))
 

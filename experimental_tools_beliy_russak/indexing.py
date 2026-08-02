@@ -164,7 +164,9 @@ def build_index(
     df["mask_area"] = areas
     df["img_h"], df["img_w"] = img_hs, img_ws
     df["size_mismatch"] = (df["height"] != df["img_h"]) | (df["width"] != df["img_w"])
-    df["is_negative"] = df["mask_area"] <= 0.0
+    # ровно ноль, а не `<= 0`: у нечитаемой маски площадь -1, и она не негатив,
+    # а битая строка — иначе она попадала бы в счётчик негативов отчёта
+    df["is_negative"] = df["mask_area"] == 0.0
     df["broken"] = df["mask_area"] < 0.0
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

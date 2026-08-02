@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import os
 import random
-import subprocess
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -81,28 +79,10 @@ class ModelEma:
                 ema_v.copy_(model_v)
 
 
-@contextlib.contextmanager
-def timed(label: str, sink=print):
-    start = time.perf_counter()
-    yield
-    sink(f"{label}: {time.perf_counter() - start:.1f} c")
-
-
 def gpu_memory_gb() -> float:
     if not torch.cuda.is_available():
         return 0.0
     return torch.cuda.max_memory_allocated() / 1e9
-
-
-def git_revision() -> str:
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5,
-        )
-        return out.stdout.strip() or "no-git"
-    except Exception:
-        return "no-git"
 
 
 def make_run_dir(name: str, resume: bool = False) -> Path:

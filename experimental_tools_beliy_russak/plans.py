@@ -172,14 +172,18 @@ def _name_from_config(config: str, overrides: dict) -> str:
 
 
 def preflight(queue: list[PlannedRun]) -> list[str]:
-    """Собрать каждый конфиг и каждую модель на CPU. Возвращает список проблем.
+    """Собрать каждый конфиг и каждую модель на CPU, проверить бюджет вычислений.
 
-    Веса всегда None: проверяется форма архитектуры и разбор конфига, а не
-    качество, и ходить в сеть за предобученными весами здесь незачем.
+    Возвращает список проблем. Веса всегда None: проверяется форма архитектуры и
+    разбор конфига, а не качество, и ходить в сеть за предобученными весами
+    здесь незачем.
 
     Одинаковые (модель, лосс) собираются один раз: в свипе по `data.*` все
     точки сетки дают одну и ту же сеть, и пересобирать её десять раз незачем.
+    А вот бюджет считается у КАЖДОЙ точки — сеть одна, но стоимость изображения
+    зависит ещё и от `data.size`, и свип по разрешению разъезжается по лимиту.
     """
+    from .budget import check as check_budget, rejection_text
     from .losses import build_loss
     from .models import build_model
 
@@ -189,11 +193,14 @@ def preflight(queue: list[PlannedRun]) -> list[str]:
         try:
             cfg = load_config(run.config, run.as_cli_overrides() + ["model.encoder_weights=null"])
             signature = json.dumps([cfg.model, cfg.loss], sort_keys=True, default=str)
-            if signature in seen:
-                continue
-            build_model(cfg.model)
-            build_loss(cfg.loss)
-            seen.add(signature)
+            if signature not in seen:
+                build_model(cfg.model)
+                build_loss(cfg.loss)
+                seen.add(signature)
+
+            verdict = check_budget(cfg)
+            if not verdict.ok:
+                problems.append(f"{run.name} ({run.config}): {rejection_text(cfg, verdict)}")
         except Exception as error:  # noqa: BLE001 — здесь важен не тип, а текст
             problems.append(f"{run.name} ({run.config}): {type(error).__name__}: {error}")
     return problems

@@ -15,6 +15,7 @@ import experimental_tools_beliy_russak  # noqa: F401
 import pytest
 import torch
 
+from experimental_tools_beliy_russak.budget import check, rejection_text
 from experimental_tools_beliy_russak.config import load_config
 from experimental_tools_beliy_russak.models import build_model
 from experimental_tools_beliy_russak.workspace import configs_root
@@ -67,6 +68,26 @@ def test_encoder_img_size_matches_the_input_size(config_path):
         pytest.skip("энкодеру не нужен фиксированный размер входа")
     assert int(img_size) == int(cfg.data.size), (
         f"encoder_kwargs.img_size={img_size} против data.size={cfg.data.size}"
+    )
+
+
+@pytest.mark.parametrize("config_path", CONFIG_FILES, ids=lambda p: p.stem)
+def test_config_is_inside_the_flops_budget_or_says_why_not(config_path):
+    """Регламент даёт 100 строгих GFLOPs на изображение, иначе 0 за весь этап.
+
+    Конфиг вне бюджета в репозитории допустим — но только как явно
+    исследовательский, с пометкой и с причиной. Молча лежать рядом с остальными
+    он не должен: рано или поздно его возьмут за основу сабмита, и разница
+    вскроется уже после загрузки.
+    """
+    cfg = load_config(config_path)
+    verdict = check(cfg)
+    if verdict.within_limit:
+        return
+
+    assert verdict.exempt, rejection_text(cfg, verdict)
+    assert cfg.get_path("budget.exempt_reason"), (
+        "пометка budget.exempt без причины через месяц ничего не объяснит"
     )
 
 
