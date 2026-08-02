@@ -311,7 +311,10 @@ git commit -m "aic: скелет пакета, тесты разделены п�
 **Interfaces:**
 - Produces:
   - `Workspace(root: str | Path)` — frozen dataclass, `root: Path` (resolved)
-  - `Workspace.find(start: str | Path | None = None, *, marker: str = "data") -> Workspace`
+  - `Workspace.find(start: str | Path | None = None, *, marker: str = "data") -> Workspace` —
+    поиск вверх **не поднимается до домашней папки и выше**: один `~/data`
+    иначе делает воркспейсом весь домашний каталог, и `ws.train_csv` молча
+    указывает в несуществующий путь
   - свойства → `Path`: `data`, `dataset_root`, `train_csv`, `src_dir`, `cache`,
     `test_root`, `test_csv`, `submission_template`, `test_img_dir`, `artifacts`,
     `index_path`, `split_path`, `runs`, `submissions`
