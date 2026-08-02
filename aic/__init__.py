@@ -64,6 +64,8 @@ _EXPORTS: dict[str, str] = {
     "load_index": "data",
     "make_folds": "data",
     "load_folds": "data",
+    # бюджет
+    "count_gflops": "budget",
 }
 
 __all__ = ["__version__", *sorted(_EXPORTS)]

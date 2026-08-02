@@ -27,7 +27,11 @@ opencv-python-headless, pillow. torch — только через extra, имп�
   функций `budget.*`, `Run.save_state`, `Run.load_state`, `submit.predict_folder`.
 - **Переменные среды выставляются в `aic/__init__.py` до любого импорта torch,
   numpy и cv2:** `KMP_DUPLICATE_LIB_OK=TRUE`, `NO_ALBUMENTATIONS_UPDATE=1`,
-  `OPENCV_LOG_LEVEL=ERROR`.
+  `OPENCV_LOG_LEVEL=ERROR`. Защита нагруженная, а не наследие: в conda-среде
+  `challenges` две копии OpenMP, и torch, потянувший numpy раньше этих
+  переменных, **обрывает процесс** на `numpy.blas_fpe_check` — без исключения,
+  без трассировки Python. **В любом файле, который трогает torch, `import aic`
+  идёт первым**, включая тесты с `pytest.importorskip("torch")`.
 - **Никакого глобального состояния:** ни синглтона воркспейса, ни реестров, ни
   автозагрузки плагинов. Состояние передаётся аргументом.
 - **Библиотека никогда не читает содержимое `config.yaml`** — только пишет и
