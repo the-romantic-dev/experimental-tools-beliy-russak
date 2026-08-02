@@ -48,6 +48,13 @@ _EXPORTS: dict[str, str] = {
     # прогон
     "Run": "runs",
     "Eval": "runs",
+    # статистика
+    "compare": "stats",
+    "verdict": "stats",
+    "gate_check": "stats",
+    "seeds_needed": "stats",
+    "paired_bootstrap": "stats",
+    "diverged_keys": "stats",
 }
 
 __all__ = ["__version__", *sorted(_EXPORTS)]
