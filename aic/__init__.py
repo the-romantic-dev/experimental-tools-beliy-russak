@@ -59,6 +59,11 @@ _EXPORTS: dict[str, str] = {
     "leaderboard": "analysis",
     "compare_table": "analysis",
     "OofView": "analysis",
+    # данные
+    "build_index": "data",
+    "load_index": "data",
+    "make_folds": "data",
+    "load_folds": "data",
 }
 
 __all__ = ["__version__", *sorted(_EXPORTS)]
