@@ -37,7 +37,14 @@ __version__ = "0.1.0"
 
 #: имя на верхнем уровне -> "модуль" или "модуль:имя_внутри"
 _EXPORTS: dict[str, str] = {
+    # где что лежит
     "Workspace": "paths",
+    # метрика
+    "AICAccumulator": "metric",
+    "AICResult": "metric",
+    "score_masks": "metric",
+    "harmonic_aic": "metric",
+    "dice_binary": "metric",
 }
 
 __all__ = ["__version__", *sorted(_EXPORTS)]
