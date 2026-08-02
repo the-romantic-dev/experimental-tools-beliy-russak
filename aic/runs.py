@@ -25,7 +25,9 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -33,8 +35,52 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from .metric import (
+    DEFAULT_AREA_GRID,
+    DEFAULT_CLS_GRID,
+    DEFAULT_MASK_GRID,
+    AICAccumulator,
+    AICResult,
+)
+
 #: подпапки, которые создаются сразу: пути на них ссылаются до первой записи
 SUBDIRS = ("ckpt", "oof", "tb", "preds")
+
+
+@dataclass(frozen=True)
+class Eval:
+    """Оценка на выборке: аккумулятор и имена кадров в том же порядке.
+
+    Пара, а не два аргумента: величины берутся из аккумулятора по позиции, а
+    совпадение кадров ищется по stem'ам. Разъехались длины — сравнение молча
+    смешает разные кадры, и разница будет мерить не гипотезу, а рассинхрон.
+    Проверка здесь делает такое состояние непредставимым.
+    """
+
+    acc: AICAccumulator
+    stems: np.ndarray
+
+    def __post_init__(self) -> None:
+        stems = np.asarray(self.stems)
+        object.__setattr__(self, "stems", stems)
+        if stems.size != len(self.acc):
+            raise ValueError(
+                f"в аккумуляторе {len(self.acc)} кадров, а stem'ов {stems.size}"
+            )
+        if len(np.unique(stems)) != stems.size:
+            raise ValueError("stem'ы повторяются — по ним нельзя сопоставить кадры")
+
+    def __len__(self) -> int:
+        return len(self.acc)
+
+    def best(
+        self,
+        mask_thresholds=None,
+        cls_thresholds=DEFAULT_CLS_GRID,
+        min_areas=DEFAULT_AREA_GRID,
+    ) -> AICResult:
+        grid = list(DEFAULT_MASK_GRID) if mask_thresholds is None else list(mask_thresholds)
+        return self.acc.best(grid, list(cls_thresholds), list(min_areas))
 
 
 class Run:
@@ -241,3 +287,80 @@ class Run:
         rows = frame[frame[y].notna() & frame[column].notna()]
         xs = (rows[column].to_numpy(dtype=float) + shift) * scale
         return xs, rows[y].to_numpy(dtype=float)
+
+    # --- оценка -------------------------------------------------------------
+
+    def save_eval(self, acc: AICAccumulator, rows: pd.DataFrame, name: str = "val") -> Path:
+        """`oof/<name>.npz` + `oof/<name>_rows.parquet`.
+
+        Строки пишутся целиком, не только stem: разрезы по домену, генератору и
+        площади GT в `analysis` берутся отсюда.
+        """
+        if "stem" not in rows.columns:
+            raise ValueError(f"в таблице строк нет колонки stem (есть {list(rows.columns)})")
+        if len(rows) != len(acc):
+            raise ValueError(
+                f"в аккумуляторе {len(acc)} кадров, а строк {len(rows)}. Сопоставление "
+                "идёт по позиции, и на разной длине оно смешало бы разные кадры"
+            )
+        oof = self.dir / "oof"
+        oof.mkdir(parents=True, exist_ok=True)
+        acc.save(oof / f"{name}.npz")
+        rows.to_parquet(oof / f"{name}_rows.parquet", index=False)
+        return oof / f"{name}.npz"
+
+    def load_rows(self, name: str = "val") -> pd.DataFrame:
+        path = self.dir / "oof" / f"{name}_rows.parquet"
+        if not path.exists():
+            raise FileNotFoundError(f"нет {path}")
+        return pd.read_parquet(path)
+
+    def load_eval(self, name: str = "val") -> Eval:
+        path = self.dir / "oof" / f"{name}.npz"
+        if not path.exists():
+            raise FileNotFoundError(f"нет {path}")
+        return Eval(AICAccumulator.load(path), self.load_rows(name)["stem"].to_numpy())
+
+    def operating_point(self, name: str = "val") -> tuple[float, float, float]:
+        """`(mask_threshold, cls_threshold, min_area)` из сводки, иначе свипом.
+
+        Остаток прежнего `load_reference`: остальная его работа разошлась по
+        `Run.open`, `history` и `load_eval`.
+        """
+        best = self.summary.get("best") or {}
+        if {"mask_threshold", "cls_threshold", "min_area"} <= set(best):
+            return (
+                float(best["mask_threshold"]),
+                float(best["cls_threshold"]),
+                float(best["min_area"]),
+            )
+        found = self.load_eval(name).best()
+        return (found.mask_threshold, found.cls_threshold, found.min_area)
+
+    # --- чекпоинты -----------------------------------------------------------
+
+    def save_state(self, state: Mapping[str, Any], name: str = "last.pt") -> Path:
+        """Записать состояние атомарно. Что в нём лежит — решает вызывающий.
+
+        Библиотека не знает ни про EMA, ни про scaler, ни про шедулер. Запись
+        идёт во временный файл рядом и `os.replace`: прогон, убитый посреди
+        записи, не должен оставлять чекпоинт, с которого потом не поднимется
+        resume.
+        """
+        import torch
+
+        ckpt = self.dir / "ckpt"
+        ckpt.mkdir(parents=True, exist_ok=True)
+        target = ckpt / name
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        torch.save(dict(state), tmp)
+        os.replace(tmp, target)
+        return target
+
+    def load_state(self, name: str = "last.pt", map_location: Any = "cpu") -> dict:
+        import torch
+
+        path = self.dir / "ckpt" / name
+        if not path.exists():
+            raise FileNotFoundError(f"нет чекпоинта {path}")
+        return torch.load(str(path), map_location=map_location, weights_only=False)

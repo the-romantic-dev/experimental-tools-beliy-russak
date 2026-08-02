@@ -47,6 +47,7 @@ _EXPORTS: dict[str, str] = {
     "dice_binary": "metric",
     # прогон
     "Run": "runs",
+    "Eval": "runs",
 }
 
 __all__ = ["__version__", *sorted(_EXPORTS)]
