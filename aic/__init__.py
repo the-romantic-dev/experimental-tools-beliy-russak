@@ -45,6 +45,8 @@ _EXPORTS: dict[str, str] = {
     "score_masks": "metric",
     "harmonic_aic": "metric",
     "dice_binary": "metric",
+    # прогон
+    "Run": "runs",
 }
 
 __all__ = ["__version__", *sorted(_EXPORTS)]

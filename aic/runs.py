@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -185,3 +186,58 @@ class Run:
         if not self.summary_path.exists():
             return {}
         return json.loads(self.summary_path.read_text(encoding="utf-8")) or {}
+
+    @property
+    def history(self) -> pd.DataFrame:
+        """`metrics.jsonl` таблицей. Пустой DataFrame, если лога ещё нет."""
+        return self._history_frame()
+
+    @property
+    def snapshot(self) -> dict:
+        """`config.yaml` как есть. Библиотека внутрь не смотрит."""
+        path = self.dir / "config.yaml"
+        if not path.exists():
+            return {}
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+    def curve(
+        self,
+        y: str,
+        x: str | tuple[str, float] = "samples",
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Две оси из лога — для `stats.gate_check` и для графиков.
+
+        `x` — имя колонки либо пара `(колонка, множитель)`. Пара нужна старым
+        прогонам: числа показов они не логировали, и ось строится из номера
+        эпохи как `(step + 1) * epoch_size`. Множитель передаёт вызывающий,
+        потому что только он знает, где у него лежит размер эпохи.
+
+        Отсутствие колонки — ошибка, а не пустая кривая. Молчаливый ноль тут
+        особенно дорог: `gate_check` на нулевой оси отвечает «вне кривой
+        эталона» на каждой эпохе, то есть гейт выключается на весь прогон, и
+        узнать об этом неоткуда.
+        """
+        frame = self._history_frame()
+        if frame.empty:
+            return np.zeros(0, dtype=float), np.zeros(0, dtype=float)
+
+        if y not in frame.columns:
+            raise KeyError(
+                f"в логе {self.jsonl_path} нет метрики {y!r}; "
+                f"есть: {', '.join(sorted(frame.columns))}"
+            )
+
+        # сдвиг на единицу только в форме с множителем: эпоха номер 0 — это уже
+        # один пройденный размер эпохи, а не ноль показов. Ровно так строил ось
+        # прежний load_reference, и совместимость чисел держится на этом
+        column, scale, shift = (x, 1.0, 0.0) if isinstance(x, str) else (x[0], float(x[1]), 1.0)
+        if column not in frame.columns:
+            raise KeyError(
+                f"в логе {self.jsonl_path} нет колонки оси {column!r}. "
+                f"Логируйте её обычной метрикой (run.log(epoch, {{'samples': ...}})) "
+                f'или постройте ось из номера эпохи: x=("step", размер_эпохи)'
+            )
+
+        rows = frame[frame[y].notna() & frame[column].notna()]
+        xs = (rows[column].to_numpy(dtype=float) + shift) * scale
+        return xs, rows[y].to_numpy(dtype=float)
