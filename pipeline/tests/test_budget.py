@@ -9,17 +9,17 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import pytest
 import torch
 
-from experimental_tools_beliy_russak.budget import (
+from aic_pipeline.budget import (
     LIMIT_GFLOPS, check, check_submission, config_gflops, count_gflops,
     inference_gflops, largest_fitting_size, rejection_text,
 )
-from experimental_tools_beliy_russak.config import load_config
-from experimental_tools_beliy_russak.models import build_model
+from aic_pipeline.config import load_config
+from aic_pipeline.models import build_model
 
 
 def smoke_config(*overrides: str):
@@ -122,8 +122,8 @@ def test_train_refuses_an_over_budget_config_before_touching_anything(tmp_path):
     Иначе проверка стоила бы загрузки датасета, а в `runs/` копились бы пустые
     папки прогонов, которые никогда не стартовали.
     """
-    from experimental_tools_beliy_russak.train import run
-    from experimental_tools_beliy_russak.workspace import use_workspace
+    from aic_pipeline.train import run
+    from aic_pipeline.workspace import use_workspace
 
     cfg = smoke_config("data.size=1024", "name=не-должен-появиться")
     with use_workspace(tmp_path):

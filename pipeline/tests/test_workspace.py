@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from experimental_tools_beliy_russak.workspace import (
+from aic_pipeline.workspace import (
     WORKSPACE_ENV,
     Workspace,
     configs_root,

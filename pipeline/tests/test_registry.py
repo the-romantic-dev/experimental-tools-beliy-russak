@@ -9,15 +9,15 @@ conftest.py: всё зарегистрированное здесь исчеза
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import pytest
 import torch
 
-from experimental_tools_beliy_russak.config import load_config
-from experimental_tools_beliy_russak.engine import build_optimizer, build_scheduler
-from experimental_tools_beliy_russak.losses import build_loss
-from experimental_tools_beliy_russak.registry import (
+from aic_pipeline.config import load_config
+from aic_pipeline.engine import build_optimizer, build_scheduler
+from aic_pipeline.losses import build_loss
+from aic_pipeline.registry import (
     LOSSES,
     OPTIMIZERS,
     PLUGIN_FILE,
@@ -26,8 +26,8 @@ from experimental_tools_beliy_russak.registry import (
     register_loss,
     register_optimizer,
 )
-from experimental_tools_beliy_russak.transforms import build_train_transform
-from experimental_tools_beliy_russak.workspace import use_workspace
+from aic_pipeline.transforms import build_train_transform
+from aic_pipeline.workspace import use_workspace
 
 
 @pytest.fixture
@@ -150,7 +150,7 @@ def test_own_optimizer_gets_ready_made_parameter_groups():
 
 
 def test_own_scheduler_receives_computed_step_counts():
-    from experimental_tools_beliy_russak.registry import register_scheduler
+    from aic_pipeline.registry import register_scheduler
 
     seen: dict = {}
 
@@ -173,7 +173,7 @@ def test_own_scheduler_receives_computed_step_counts():
 def test_own_aug_preset_is_inserted_between_geometry_and_normalisation():
     import albumentations as A
 
-    from experimental_tools_beliy_russak.registry import register_aug
+    from aic_pipeline.registry import register_aug
 
     @register_aug("мой")
     def mine():
@@ -190,7 +190,7 @@ def test_own_aug_preset_is_inserted_between_geometry_and_normalisation():
 
 PLUGIN_BODY = """
 import torch
-from experimental_tools_beliy_russak import register_loss
+from aic_pipeline import register_loss
 
 @register_loss("из-файла")
 def from_file(logits, targets, *, value=0.75):
@@ -243,7 +243,7 @@ def test_plugins_key_in_config_loads_a_module(tmp_path, monkeypatch):
     (tmp_path / "configs").mkdir()
     (tmp_path / "общий_плагин.py").write_text(
         "import torch\n"
-        "from experimental_tools_beliy_russak import register_loss\n"
+        "from aic_pipeline import register_loss\n"
         "@register_loss('из-модуля')\n"
         "def f(logits, targets):\n"
         "    return torch.zeros(logits.shape[0])\n",

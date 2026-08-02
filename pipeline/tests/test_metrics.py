@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import numpy as np
 import pytest
 
-from experimental_tools_beliy_russak.metrics import (
+from aic_pipeline.metrics import (
     FP_AREA_THRESHOLD,
     AICAccumulator,
     dice_binary,

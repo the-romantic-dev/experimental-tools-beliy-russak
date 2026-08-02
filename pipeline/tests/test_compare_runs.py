@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import json
 
@@ -11,8 +11,8 @@ import pytest
 
 matplotlib.use("Agg")
 
-from experimental_tools_beliy_russak.models import describe_encoder  # noqa: E402
-from experimental_tools_beliy_russak.analysis.compare_runs import (  # noqa: E402
+from aic_pipeline.models import describe_encoder  # noqa: E402
+from aic_pipeline.analysis.compare_runs import (  # noqa: E402
     compare_table,
     load_history,
     load_summary,

@@ -7,15 +7,15 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from experimental_tools_beliy_russak.metrics import AICAccumulator
-from experimental_tools_beliy_russak.analysis.oof_report import MISS_DICE, OofView, by_area, compare, report
-from experimental_tools_beliy_russak.analysis.oof_report import _frame
+from aic_pipeline.metrics import AICAccumulator
+from aic_pipeline.analysis.oof_report import MISS_DICE, OofView, by_area, compare, report
+from aic_pipeline.analysis.oof_report import _frame
 
 
 def _make_run(tmp_path, probs, gts, cls_probs, rows=None, name="run"):
@@ -123,7 +123,7 @@ def test_old_calib_without_min_area_still_reads(simple_run):
 
 
 def test_ceilings_are_monotonic(simple_run):
-    from experimental_tools_beliy_russak.analysis.oof_report import ceilings
+    from aic_pipeline.analysis.oof_report import ceilings
 
     table = ceilings(OofView(simple_run))
     assert list(table["сценарий"])[0].startswith("текущий")

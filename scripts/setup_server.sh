@@ -24,7 +24,7 @@ set -euo pipefail
 
 WS="${WS:-${AIC_WORKSPACE:-$HOME/aic}}"
 REPO="${REPO:-$HOME/etbr}"
-REPO_URL="${REPO_URL:-https://github.com/the-romantic-dev/experimental-tools-beliy-russak.git}"
+REPO_URL="${REPO_URL:-https://github.com/the-romantic-dev/aic-pipeline.git}"
 
 DATA_URL="https://huggingface.co/datasets/QwertyNice/Digital_Detective_AIC2026/resolve/main/train_stage1.zip"
 DATA_SHA="2ddd33c159d1497e97981e3f6051af4bbe0f5426ee2a16bdf64f4d198bf381be"

@@ -8,20 +8,20 @@ e0 и e1 портит неверный учёт паддинга, а e3 стар
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
 
-from experimental_tools_beliy_russak.datasets import build_balanced_sampler, valid_region
-from experimental_tools_beliy_russak.engine import SCRATCH_MARKERS, _histograms, build_optimizer
-from experimental_tools_beliy_russak.inference import _to_original
-from experimental_tools_beliy_russak.losses import build_loss, soft_dice_loss
-from experimental_tools_beliy_russak.metrics import AICAccumulator
-from experimental_tools_beliy_russak.models import build_model
-from experimental_tools_beliy_russak.streams import BayarConv, InputFusion, ResidualExtractor, SRMConv, encoder_strides
+from aic_pipeline.datasets import build_balanced_sampler, valid_region
+from aic_pipeline.engine import SCRATCH_MARKERS, _histograms, build_optimizer
+from aic_pipeline.inference import _to_original
+from aic_pipeline.losses import build_loss, soft_dice_loss
+from aic_pipeline.metrics import AICAccumulator
+from aic_pipeline.models import build_model
+from aic_pipeline.streams import BayarConv, InputFusion, ResidualExtractor, SRMConv, encoder_strides
 
 # --- e1: паддинг и полезная область -----------------------------------------
 
@@ -390,7 +390,7 @@ def test_val_subset_keeps_every_negative(val_frame):
     """FPR_neg считается по негативам, их всего ~3%. Прореживать надо позитивы:
     при обычном val_frac=0.25 негативов осталось бы полторы сотни и одна ложная
     тревога двигала бы метрику сильнее, чем эффект проверяемой гипотезы."""
-    from experimental_tools_beliy_russak.train import _subset
+    from aic_pipeline.train import _subset
 
     out = _subset(val_frame, 0.25, None, seed=0, keep_negatives=True)
     assert int(out["is_negative"].sum()) == 639
@@ -400,7 +400,7 @@ def test_val_subset_keeps_every_negative(val_frame):
 def test_val_subset_respects_a_hard_limit(val_frame):
     """Регресс: при val_limit меньше числа негативов выборка вырождалась
     в одни негативы, и Dice_pos обнулялся при полностью живой модели."""
-    from experimental_tools_beliy_russak.train import _subset
+    from aic_pipeline.train import _subset
 
     out = _subset(val_frame, None, 120, seed=0, keep_negatives=True)
     assert len(out) == 120
@@ -409,7 +409,7 @@ def test_val_subset_respects_a_hard_limit(val_frame):
 
 
 def test_val_subset_without_flag_is_plain_sampling(val_frame):
-    from experimental_tools_beliy_russak.train import _subset
+    from aic_pipeline.train import _subset
 
     out = _subset(val_frame, 0.25, None, seed=0, keep_negatives=False)
     assert len(out) == pytest.approx(len(val_frame) * 0.25, rel=0.01)

@@ -2,7 +2,7 @@
 
 Соглашение об импорте:
 
-    import experimental_tools_beliy_russak as etbr
+    import aic_pipeline as etbr
 
     cfg = etbr.load_config("baseline", ["train.lr=1e-4"])
     etbr.set_workspace("D:/projects/next-competition")

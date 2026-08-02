@@ -17,18 +17,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from experimental_tools_beliy_russak.datasets import SegDataset
-from experimental_tools_beliy_russak.imageio import imwrite
-from experimental_tools_beliy_russak.schema import find_unknown_keys
-from experimental_tools_beliy_russak.synth import (
+from aic_pipeline.datasets import SegDataset
+from aic_pipeline.imageio import imwrite
+from aic_pipeline.schema import find_unknown_keys
+from aic_pipeline.synth import (
     OPS,
     SynthSettings,
     needs_donor,
     pick_op,
     synthesize,
 )
-from experimental_tools_beliy_russak.transforms import build_val_transform
-from experimental_tools_beliy_russak.workspace import resolve, set_workspace
+from aic_pipeline.transforms import build_val_transform
+from aic_pipeline.workspace import resolve, set_workspace
 
 SIZE = 512
 
@@ -202,8 +202,8 @@ def test_only_the_training_half_gets_synthesis(monkeypatch):
     """Синтетика в валидации сделала бы метрику несравнимой с остальными прогонами."""
     import logging
 
-    from experimental_tools_beliy_russak import train as train_module
-    from experimental_tools_beliy_russak.config import load_config
+    from aic_pipeline import train as train_module
+    from aic_pipeline.config import load_config
 
     seen: list = []
 

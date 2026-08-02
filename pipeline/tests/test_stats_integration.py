@@ -6,10 +6,10 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
-from experimental_tools_beliy_russak.config import load_config
-from experimental_tools_beliy_russak.stats import Gate, gate_metrics, stats_settings
+from aic_pipeline.config import load_config
+from aic_pipeline.stats import Gate, gate_metrics, stats_settings
 
 
 def test_gate_metrics_are_absent_when_stats_are_off():

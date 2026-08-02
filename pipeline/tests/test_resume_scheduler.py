@@ -9,14 +9,14 @@ warmup. Если состояние не восстановить, resume с с�
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import pytest
 import torch
 import torch.nn as nn
 
-from experimental_tools_beliy_russak.engine import build_optimizer, build_scheduler
-from experimental_tools_beliy_russak.train import _checkpoint_state, _restore_state
+from aic_pipeline.engine import build_optimizer, build_scheduler
+from aic_pipeline.train import _checkpoint_state, _restore_state
 
 CFG_TRAIN = {
     "lr": 1e-3,

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import pytest
 
-from experimental_tools_beliy_russak.config import apply_override, config_hash, flatten, load_config
-from experimental_tools_beliy_russak.indexing import parse_domain, parse_generator, parse_group_id, stem_of
+from aic_pipeline.config import apply_override, config_hash, flatten, load_config
+from aic_pipeline.indexing import parse_domain, parse_generator, parse_group_id, stem_of
 
 
 def test_base_config_inheritance_and_overrides():

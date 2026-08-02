@@ -8,7 +8,7 @@ env.json.
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import json
 import re
@@ -16,7 +16,7 @@ import subprocess
 
 import pytest
 
-from experimental_tools_beliy_russak.provenance import environment_info, write_environment
+from aic_pipeline.provenance import environment_info, write_environment
 
 
 def test_environment_info_pins_the_versions_that_shape_the_network():

@@ -8,13 +8,13 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import pandas as pd
 import pytest
 
-from experimental_tools_beliy_russak.config import load_config
-from experimental_tools_beliy_russak.train import _subset
+from aic_pipeline.config import load_config
+from aic_pipeline.train import _subset
 
 
 def make_fold(n_pos: int = 400, n_neg: int = 40) -> pd.DataFrame:

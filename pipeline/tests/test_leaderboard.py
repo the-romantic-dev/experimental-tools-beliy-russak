@@ -7,12 +7,12 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import json
 
-from experimental_tools_beliy_russak.analysis.leaderboard import leaderboard
-from experimental_tools_beliy_russak.workspace import use_workspace
+from aic_pipeline.analysis.leaderboard import leaderboard
+from aic_pipeline.workspace import use_workspace
 
 
 def write_run(root, name: str, config: str, best_aic: float, budget: dict | None = None) -> None:

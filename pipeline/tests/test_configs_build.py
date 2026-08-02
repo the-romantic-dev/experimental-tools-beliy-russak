@@ -10,15 +10,15 @@ MiT — нативный энкодер smp и пишется без префи�
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import pytest
 import torch
 
-from experimental_tools_beliy_russak.budget import check, rejection_text
-from experimental_tools_beliy_russak.config import load_config
-from experimental_tools_beliy_russak.models import build_model
-from experimental_tools_beliy_russak.workspace import configs_root
+from aic_pipeline.budget import check, rejection_text
+from aic_pipeline.config import load_config
+from aic_pipeline.models import build_model
+from aic_pipeline.workspace import configs_root
 
 # conftest.py прибивает воркспейс к корню репозитория ещё до сбора тестов,
 # поэтому здесь configs_root() уже указывает куда надо

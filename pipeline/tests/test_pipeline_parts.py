@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import numpy as np
 import pytest
 import torch
 
-from experimental_tools_beliy_russak.datasets import build_balanced_sampler, build_sampler
-from experimental_tools_beliy_russak.inference import postprocess
-from experimental_tools_beliy_russak.losses import build_loss, soft_dice_loss, tversky_loss
-from experimental_tools_beliy_russak.models import build_model
-from experimental_tools_beliy_russak.transforms import build_train_transform, build_val_transform
+from aic_pipeline.datasets import build_balanced_sampler, build_sampler
+from aic_pipeline.inference import postprocess
+from aic_pipeline.losses import build_loss, soft_dice_loss, tversky_loss
+from aic_pipeline.models import build_model
+from aic_pipeline.transforms import build_train_transform, build_val_transform
 
 
 @pytest.fixture(scope="module")

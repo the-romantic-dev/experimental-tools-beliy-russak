@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import json
 import shutil
@@ -15,8 +15,8 @@ import shutil
 import pytest
 import yaml
 
-from experimental_tools_beliy_russak.config import apply_override
-from experimental_tools_beliy_russak.plans import (
+from aic_pipeline.config import apply_override
+from aic_pipeline.plans import (
     PlannedRun,
     describe,
     load_plan,
@@ -192,8 +192,8 @@ def queue_env(tmp_path, monkeypatch):
     загружает и собирает по ним модели на префлайте. А вот `runs/` должен быть
     временным, иначе тест засорял бы настоящую папку прогонов.
     """
-    import experimental_tools_beliy_russak.train as train_module
-    from experimental_tools_beliy_russak.workspace import configs_root, use_workspace
+    import aic_pipeline.train as train_module
+    from aic_pipeline.workspace import configs_root, use_workspace
 
     shutil.copytree(configs_root(), tmp_path / "configs")
     runs_root = tmp_path / "runs"

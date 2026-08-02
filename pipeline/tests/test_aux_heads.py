@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import numpy as np
 import pytest
 import torch
 
-from experimental_tools_beliy_russak.geometry import (
+from aic_pipeline.geometry import (
     denormalize_area,
     mask_geometry,
     normalize_area,
     normalize_components,
 )
-from experimental_tools_beliy_russak.losses import build_loss
-from experimental_tools_beliy_russak.models import build_model
-from experimental_tools_beliy_russak.models.aux_heads import AUX_HEADS, parse_aux_spec
+from aic_pipeline.losses import build_loss
+from aic_pipeline.models import build_model
+from aic_pipeline.models.aux_heads import AUX_HEADS, parse_aux_spec
 
 
 def box_mask(h=40, w=40, y0=0, y1=10, x0=0, x1=10) -> torch.Tensor:
@@ -231,10 +231,10 @@ def test_dataset_emits_aux_targets_only_when_asked(tmp_path):
     import numpy as np
     import pandas as pd
 
-    from experimental_tools_beliy_russak.datasets import SegDataset
-    from experimental_tools_beliy_russak.imageio import imwrite
-    from experimental_tools_beliy_russak.transforms import build_val_transform
-    from experimental_tools_beliy_russak import workspace
+    from aic_pipeline.datasets import SegDataset
+    from aic_pipeline.imageio import imwrite
+    from aic_pipeline.transforms import build_val_transform
+    from aic_pipeline import workspace
 
     root = tmp_path / "ds"
     (root / "img").mkdir(parents=True)
@@ -252,7 +252,7 @@ def test_dataset_emits_aux_targets_only_when_asked(tmp_path):
     original = workspace.dataset_root
     workspace.dataset_root = lambda: root
     try:
-        import experimental_tools_beliy_russak.datasets as ds_module
+        import aic_pipeline.datasets as ds_module
         original_resolve = ds_module.resolve
         ds_module.resolve = lambda rel: root / str(rel)
         try:

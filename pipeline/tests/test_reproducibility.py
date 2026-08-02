@@ -8,15 +8,15 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import albumentations as A
 import numpy as np
 import pytest
 import torch
 
-from experimental_tools_beliy_russak.datasets import build_sampler
-from experimental_tools_beliy_russak.transforms import build_train_transform, build_transform, build_val_transform
+from aic_pipeline.datasets import build_sampler
+from aic_pipeline.transforms import build_train_transform, build_transform, build_val_transform
 
 IMAGE = np.random.RandomState(0).randint(0, 255, (64, 96, 3), dtype=np.uint8)
 MASK = np.zeros((64, 96), dtype=np.float32)

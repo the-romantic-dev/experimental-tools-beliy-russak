@@ -16,7 +16,7 @@ import albumentations as A
 import torch
 import torch.nn.functional as F
 
-from experimental_tools_beliy_russak import (
+from aic_pipeline import (
     register_aug,
     register_loss,
     register_optimizer,
@@ -105,7 +105,7 @@ def step_decay(optimizer, cfg_train, total_steps, warmup_steps):
 # Раскомментируй, если нужен свой бэкенд. Единственное жёсткое требование —
 # форма выхода: на ней держатся и метрика, и сборка сабмита.
 #
-# from experimental_tools_beliy_russak import register_backend
+# from aic_pipeline import register_backend
 #
 # @register_backend("my_unet")
 # def my_unet(cfg_model):

@@ -9,14 +9,14 @@ timm адаптирует предобученный стем под 9 вход�
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import pytest
 import torch
 import torch.nn as nn
 
-from experimental_tools_beliy_russak.models import build_model, find_stem_conv, restore_pretrained_stem
-from experimental_tools_beliy_russak.streams import InputFusion
+from aic_pipeline.models import build_model, find_stem_conv, restore_pretrained_stem
+from aic_pipeline.streams import InputFusion
 
 
 def emulate_timm_adaptation(weight3: torch.Tensor, in_channels: int) -> torch.Tensor:

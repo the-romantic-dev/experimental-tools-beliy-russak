@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from experimental_tools_beliy_russak.workspace import set_workspace
+from aic_pipeline.workspace import set_workspace
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -35,7 +35,7 @@ def _isolate_registries():
     Иначе `@register_loss("мой")` из одного теста меняла бы вывод `aic registry`
     в другом, и порядок тестов начал бы влиять на результат.
     """
-    from experimental_tools_beliy_russak.registry import sandbox
+    from aic_pipeline.registry import sandbox
 
     with sandbox():
         yield

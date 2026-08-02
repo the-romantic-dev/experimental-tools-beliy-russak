@@ -9,7 +9,7 @@
 его сама.
 
     # ~/моя-папка/aic_plugins.py
-    from experimental_tools_beliy_russak import register_loss
+    from aic_pipeline import register_loss
 
     @register_loss("lovasz")
     def lovasz(logits, targets, *, per_image=True):

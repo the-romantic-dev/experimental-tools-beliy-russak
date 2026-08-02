@@ -6,19 +6,19 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import pytest
 import yaml
 
-from experimental_tools_beliy_russak.config import load_config
-from experimental_tools_beliy_russak.schema import (
+from aic_pipeline.config import load_config
+from aic_pipeline.schema import (
     SCHEMA,
     UnknownConfigKey,
     check_config,
     find_unknown_keys,
 )
-from experimental_tools_beliy_russak.workspace import configs_root, use_workspace
+from aic_pipeline.workspace import configs_root, use_workspace
 
 
 @pytest.fixture

@@ -13,13 +13,13 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 from pathlib import Path
 
 import pytest
 
-from experimental_tools_beliy_russak.compliance import (
+from aic_pipeline.compliance import (
     modules_touching_test_set, pretrained_sources,
 )
 

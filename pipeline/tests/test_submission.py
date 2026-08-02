@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import zipfile
 
@@ -15,8 +15,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from experimental_tools_beliy_russak.imageio import imread, imwrite
-from experimental_tools_beliy_russak.submission import (
+from aic_pipeline.imageio import imread, imwrite
+from aic_pipeline.submission import (
     build_submission,
     load_test_table,
     pack_zip,
@@ -93,8 +93,8 @@ def checkpoint(tmp_path):
     """
     import torch
 
-    from experimental_tools_beliy_russak.config import load_config
-    from experimental_tools_beliy_russak.models import build_model
+    from aic_pipeline.config import load_config
+    from aic_pipeline.models import build_model
 
     made: list[str] = []
 

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-import experimental_tools_beliy_russak  # noqa: F401
+import aic_pipeline  # noqa: F401
 
 import json
 
@@ -15,10 +15,10 @@ import pandas as pd
 import pytest
 import yaml
 
-from experimental_tools_beliy_russak.config import load_config
-from experimental_tools_beliy_russak.metrics import AICAccumulator, harmonic_aic
-from experimental_tools_beliy_russak.schema import find_unknown_keys
-from experimental_tools_beliy_russak.stats import (
+from aic_pipeline.config import load_config
+from aic_pipeline.metrics import AICAccumulator, harmonic_aic
+from aic_pipeline.schema import find_unknown_keys
+from aic_pipeline.stats import (
     Boot,
     PerImage,
     Reference,
