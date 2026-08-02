@@ -115,11 +115,11 @@ def index(
     limit: Optional[int] = typer.Option(None, help="только первые N строк (для отладки)"),
 ) -> None:
     """Собрать индекс датасета: домены, генераторы, группы, площади масок, негативы."""
-    from .indexing import build_index, summarize
+    from aic.data import build_index, summarize_index as summarize
 
     ensure_dirs()
     typer.echo("сканирую маски (это единственный долгий шаг, делается один раз)...")
-    df = build_index(workers=workers, limit=limit)
+    df = build_index(workspace(), workers=workers, limit=limit)
     typer.echo(summarize(df))
     typer.secho(f"\nсохранено: {index_path()}", fg="green")
 
@@ -130,9 +130,10 @@ def split(
     seed: int = typer.Option(42),
 ) -> None:
     """Нарезать групповые стратифицированные фолды (без утечки исходных кадров)."""
-    from .splits import make_folds, summarize
+    from aic.data import load_index, make_folds, summarize_folds as summarize
 
-    df = make_folds(n_folds=folds, seed=seed)
+    df = make_folds(load_index(index_path()), n_folds=folds, seed=seed,
+                    out_path=split_path())
     typer.echo(summarize(df))
     typer.secho(f"\nсохранено: {split_path()}", fg="green")
 
@@ -145,15 +146,16 @@ def precache(
     limit: Optional[int] = typer.Option(None),
 ) -> None:
     """Собрать ресайз-кэш. После этого ставь в конфиге data.source=cache."""
-    from .indexing import load_index
-    from .precache import build_cache, cache_size_gb
+    from aic.data import build_cache, cache_size_gb, load_index
 
-    df = load_index()
+    df = load_index(index_path())
     if limit:
         df = df.head(limit)
-    stats = build_cache(df, max_side=max_side, workers=workers, quality=quality)
+    stats = build_cache(workspace(), df, max_side=max_side, workers=workers,
+                        quality=quality)
     typer.echo(f"{stats}")
-    typer.secho(f"кэш s{max_side}: {cache_size_gb(max_side):.1f} ГБ", fg="green")
+    typer.secho(f"кэш s{max_side}: {cache_size_gb(workspace(), max_side):.1f} ГБ",
+                fg="green")
 
 
 @app.command()
@@ -430,7 +432,7 @@ def eval(
     import pandas as pd
 
     from .inference import evaluate_full_res
-    from .metrics import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID
+    from aic.metric import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID
 
     run_dir = Path(run_dir)
     ckpt = Path(checkpoint) if checkpoint.endswith(".pt") else run_dir / "ckpt" / f"{checkpoint}.pt"
@@ -590,9 +592,9 @@ def board(
     diff: bool = typer.Option(True, help="показывать только различающиеся параметры конфигов"),
 ) -> None:
     """Таблица всех прогонов: AIC, Dice, FPR, пороги, чем конфиги отличаются."""
-    from .analysis.leaderboard import leaderboard
+    from aic.analysis import leaderboard
 
-    table = leaderboard(sort_by=sort, only_diff=diff)
+    table = leaderboard(runs_root(), sort_by=sort, only_diff=diff)
     if table.empty:
         typer.secho("в runs/ пока пусто", fg="yellow")
         raise typer.Exit()

@@ -41,10 +41,10 @@ import torch
 from torch.utils.data import Dataset, RandomSampler, WeightedRandomSampler
 
 from .geometry import mask_geometry
-from .imageio import imread
+from aic.data import imread
 from .synth import SynthSettings, needs_donor, pick_op, synthesize
-from .workspace import resolve
-from .precache import cached_path
+from .workspace import resolve, workspace
+from aic.data import cached_path
 
 cv2.setNumThreads(0)  # иначе воркеры DataLoader дерутся за ядра
 
@@ -208,7 +208,7 @@ class SegDataset(Dataset):
 
     def _resolve(self, rel_path: str, is_mask: bool) -> Path:
         if self.source == "cache":
-            path = cached_path(rel_path, self.cache_size, is_mask)
+            path = cached_path(workspace(), rel_path, self.cache_size, is_mask)
             if path.exists():
                 return path
         return resolve(rel_path)

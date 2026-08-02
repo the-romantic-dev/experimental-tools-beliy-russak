@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from aic_pipeline.datasets import build_balanced_sampler, build_sampler
-from aic_pipeline.inference import postprocess
+from aic.submit import postprocess
 from aic_pipeline.losses import build_loss, soft_dice_loss, tversky_loss
 from aic_pipeline.models import build_model
 from aic_pipeline.transforms import build_train_transform, build_val_transform

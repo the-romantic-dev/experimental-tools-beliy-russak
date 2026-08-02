@@ -138,3 +138,15 @@ def test_load_state_on_a_missing_file_says_so(tmp_path):
     run.close()
     with pytest.raises(FileNotFoundError, match="last.pt"):
         Run.open(run.dir).load_state()
+
+
+def test_load_eval_names_the_files_on_a_length_mismatch(tmp_path):
+    """Общей формулировки мало: без имён файлов непонятно, что чинить."""
+    run = Run.create(tmp_path, "битая-оценка", tensorboard=False)
+    run.save_eval(_acc(4), _rows(4))
+    # подменяем строки на более короткие — так выглядит рассинхрон на диске
+    _rows(3).to_parquet(run.dir / "oof" / "val_rows.parquet", index=False)
+    run.close()
+
+    with pytest.raises(ValueError, match="val_rows.parquet"):
+        Run.open(run.dir).load_eval()

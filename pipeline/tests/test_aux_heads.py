@@ -232,7 +232,7 @@ def test_dataset_emits_aux_targets_only_when_asked(tmp_path):
     import pandas as pd
 
     from aic_pipeline.datasets import SegDataset
-    from aic_pipeline.imageio import imwrite
+    from aic.data import imwrite
     from aic_pipeline.transforms import build_val_transform
     from aic_pipeline import workspace
 

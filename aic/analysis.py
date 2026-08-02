@@ -16,7 +16,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from .metric import EPS, FP_AREA_THRESHOLD, harmonic_aic
+from .metric import EPS, FP_AREA_THRESHOLD, AICAccumulator, harmonic_aic
 from .runs import Eval, Run
 
 #: ключи снапшота, которые в таблицу не идут никогда: они различаются всегда и
@@ -175,7 +175,13 @@ class OofView:
     заставили бы считать вердикты не по той метрике, по которой отбирают модели.
     """
 
-    def __init__(self, ev: Eval, rows: pd.DataFrame | None = None) -> None:
+    def __init__(self, ev: Eval | AICAccumulator, rows: pd.DataFrame | None = None) -> None:
+        # аккумулятор принимается наравне с Eval: разбор одного прогона не
+        # сравнивает его ни с чем, и stem'ы кадров ему не нужны. Требовать их
+        # значило бы отказываться разбирать прогон, у которого не сохранились
+        # строки валидации, — а разобрать его как раз можно
+        if isinstance(ev, AICAccumulator):
+            ev = Eval(ev, np.arange(len(ev)))
         self.ev = ev
         self.rows = rows
         pred, inter, gt_sum, n_pixels, cls_prob = ev.acc.tables()
@@ -192,8 +198,20 @@ class OofView:
 
     @classmethod
     def from_run(cls, run_dir: str | Path, name: str = "val") -> "OofView":
+        """Разбор по папке прогона. Строки валидации необязательны.
+
+        Без `<name>_rows.parquet` доступно всё, кроме разрезов по домену и
+        генератору: корзины по площади и потолки считаются по одному `npz`.
+        """
         run = Run.open(run_dir)
-        return cls(run.load_eval(name), run.load_rows(name))
+        rows_path = run.dir / "oof" / f"{name}_rows.parquet"
+        if not rows_path.exists():
+            return cls(AICAccumulator.load(run.dir / "oof" / f"{name}.npz"))
+
+        rows = run.load_rows(name)
+        acc = AICAccumulator.load(run.dir / "oof" / f"{name}.npz")
+        source = run.load_eval(name) if "stem" in rows.columns else acc
+        return cls(source, rows)
 
     def _bin_index(self, mask_threshold: float) -> int:
         # ровно как в AICAccumulator.sweep, иначе разрез считался бы в другой точке

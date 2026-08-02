@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from aic_pipeline.imageio import imread, imwrite
+from aic.data import imread, imwrite
 from aic_pipeline.submission import (
     build_submission,
     load_test_table,

@@ -33,7 +33,7 @@ from scipy import stats as sps
 # попадает scripts/, а не корень воркспейса — пакет оттуда не виден
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from aic_pipeline.metrics import AICAccumulator, harmonic_aic  # noqa: E402
+from aic.metric import AICAccumulator, harmonic_aic  # noqa: E402
 from aic_pipeline.stats import align_by_stem, per_image  # noqa: E402
 from aic_pipeline.workspace import runs_root  # noqa: E402
 

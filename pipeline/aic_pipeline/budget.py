@@ -1,48 +1,26 @@
-"""Бюджет вычислений: не больше 100 строгих GFLOPs на одно изображение.
+"""Бюджет по конфигу: счёт — из `aic.budget`, сборка модели и пометки — здесь.
 
-Регламент задаёт лимит в классических FLOPs, где умножение-сложение (MAC)
-считается за две операции. Популярные счётчики (fvcore, thop, ptflops) пишут в
-выводе «FLOPs», а считают MACs, то есть вдвое меньше — и решение, собранное по
-их числу, укладывается в лимит только на бумаге. Источником правды в спорных
-случаях регламент называет `torch.utils.flop_counter.FlopCounterMode`, поэтому
-здесь используется только он.
+Сам счётчик строгих FLOPs живёт в библиотеке: он не знает ни про конфиги, ни про
+то, как вы собираете сеть. Здесь остаётся то, чего библиотека решать не должна:
+сборка модели по секции `model`, кэш по её нормализованному виду и пометка
+`budget.exempt`, которой конфиг разрешает исследовательскому прогону выйти за
+лимит. Регламенту эта пометка неизвестна — это соглашение внутри команды.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-import torch
-from torch.utils.flop_counter import FlopCounterMode
+from aic.budget import LIMIT_GFLOPS, count_gflops  # noqa: F401 — переэкспорт
+from aic.budget import Verdict as _Verdict
 
 from .config import get_path
-
-#: лимит регламента, строгие FLOPs на одно изображение
-LIMIT_GFLOPS = 100.0
 
 #: (нормализованная секция model, размер) -> GFLOPs. Сеть не зависит от секций
 #: data.* и loss.*, поэтому свип по ним считается один раз, а не на каждой точке
 _CACHE: dict[tuple[str, int], float] = {}
-
-
-def count_gflops(model: torch.nn.Module, size: int, *, channels: int = 3) -> float:
-    """Строгие GFLOPs одного forward на входе (1, channels, size, size).
-
-    Модель считается там, где лежит: перекладывать её здесь нельзя, иначе
-    вызывающий получил бы обратно испорченный объект.
-    """
-    try:
-        device = next(model.parameters()).device
-    except StopIteration:
-        device = torch.device("cpu")
-
-    counter = FlopCounterMode(display=False)
-    with torch.no_grad(), counter:
-        model(torch.zeros(1, channels, size, size, device=device))
-    return counter.get_total_flops() / 1e9
 
 
 def config_gflops(cfg_model: Mapping[str, Any], size: int) -> float:
@@ -84,22 +62,23 @@ def inference_gflops(cfg: Mapping[str, Any], *, n_views: int = 1, n_models: int 
     return config_gflops(cfg.get("model", {}), size) * int(n_views) * int(n_models)
 
 
-@dataclass(frozen=True)
-class Verdict:
-    """Влезает ли одно изображение в лимит — и почему проверка всё же прошла."""
+class Verdict(_Verdict):
+    """Библиотечный вердикт плюс пометка `budget.exempt` из конфига.
 
-    gflops: float
-    limit: float
-    size: int
-    n_views: int = 1
-    n_models: int = 1
-    exempt: bool = False
-    exempt_reason: str | None = None
+    Послабление — соглашение внутри команды, а не часть регламента, поэтому в
+    библиотеке его нет: там `ok` совпадает с `within_limit`.
+    """
 
-    @property
-    def within_limit(self) -> bool:
-        """Настоящий ответ регламента, без всяких пометок."""
-        return self.gflops <= self.limit
+    def __init__(
+        self,
+        *args,
+        exempt: bool = False,
+        exempt_reason: str | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        object.__setattr__(self, "exempt", bool(exempt))
+        object.__setattr__(self, "exempt_reason", exempt_reason)
 
     @property
     def ok(self) -> bool:
@@ -107,28 +86,14 @@ class Verdict:
 
     @property
     def text(self) -> str:
-        recipe = f"{self.size}px"
-        if self.n_views > 1:
-            recipe += f" x{self.n_views} видов TTA"
-        if self.n_models > 1:
-            recipe += f" x{self.n_models} моделей"
-        head = f"{self.gflops:.1f} из {self.limit:.0f} GFLOPs на изображение ({recipe})"
-
-        if self.within_limit:
-            return f"{head} — в бюджете"
-        excess = f"превышение в {self.gflops / self.limit:.2f} раза"
-        if self.exempt:
-            reason = self.exempt_reason or "причина не указана"
-            return f"{head} — {excess}, но помечен budget.exempt: {reason}"
-        return f"{head} — {excess}"
+        base = super().text
+        if self.within_limit or not self.exempt:
+            return base
+        reason = self.exempt_reason or "причина не указана"
+        return f"{base}, но помечен budget.exempt: {reason}"
 
     def as_dict(self) -> dict:
-        return {
-            "gflops": round(self.gflops, 1),
-            "limit_gflops": self.limit,
-            "within_limit": self.within_limit,
-            "exempt": self.exempt,
-        }
+        return {**super().as_dict(), "exempt": self.exempt}
 
 
 def check(

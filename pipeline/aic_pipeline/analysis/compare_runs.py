@@ -14,7 +14,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 
-from ..metrics import DEFAULT_MASK_GRID, AICAccumulator
+from aic.metric import DEFAULT_MASK_GRID, AICAccumulator
+from aic.runs import Run
+
 from ..workspace import runs_root
 
 
@@ -30,21 +32,17 @@ def resolve_run(run: str | Path) -> Path:
 
 
 def load_history(run: str | Path) -> pd.DataFrame:
-    """metrics.jsonl -> DataFrame по эпохам."""
+    """metrics.jsonl -> DataFrame по эпохам. Читает библиотека, а не мы сами."""
     run_dir = resolve_run(run)
-    path = run_dir / "metrics.jsonl"
-    if not path.exists():
-        return pd.DataFrame()
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
-    frame = pd.DataFrame(rows)
+    frame = Run.open(run_dir).history
+    if frame.empty:
+        return frame
     frame.insert(0, "run", run_dir.name)
     return frame
 
 
 def load_summary(run: str | Path) -> dict:
-    run_dir = resolve_run(run)
-    path = run_dir / "summary.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    return Run.open(resolve_run(run)).summary
 
 
 def compare_table(runs: Sequence[str | Path]) -> pd.DataFrame:

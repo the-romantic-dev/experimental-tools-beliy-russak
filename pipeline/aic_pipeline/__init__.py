@@ -77,25 +77,11 @@ _EXPORTS: dict[str, str] = {
     "AverageMeter": "utils",
     "ModelEma": "utils",
     "train_run": "train:run",
-    # метрика
-    "AICAccumulator": "metrics",
-    "AICResult": "metrics",
-    "score_masks": "metrics",
-    "harmonic_aic": "metrics",
-    "dice_binary": "metrics",
-    # данные
-    "load_index": "indexing",
-    "load_folds": "splits",
+    # данные, модель, сабмит
     "SegDataset": "datasets",
-    # модель
     "build_model": "models",
     "build_loss": "losses",
-    # анализ и сабмит
-    "leaderboard": "analysis.leaderboard",
-    "compare_table": "analysis.compare_runs",
-    "plot_history": "analysis.compare_runs",
     "build_submission": "submission",
-    "validate_submission": "submission",
 }
 
 __all__ = ["__version__", *sorted(_EXPORTS)]

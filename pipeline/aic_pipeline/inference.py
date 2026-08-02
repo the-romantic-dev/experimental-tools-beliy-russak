@@ -1,8 +1,13 @@
-"""Инференс: чекпоинт -> вероятности -> бинарные PNG-маски исходного размера.
+"""Инференс пайплайна: чекпоинт -> вероятности -> бинарные PNG-маски.
 
-Формат сабмита по условию: одноканальный PNG, 0 — фон, 255 — манипуляция,
-размер как у входного изображения. Возврат к исходному размеру делается здесь,
-а не в даталоадере, чтобы метрика считалась ровно на том, что уйдёт в сабмит.
+Механика регламента (TTA, возврат к исходному размеру, постобработка) живёт
+в `aic.submit` и берётся оттуда. Здесь остаётся то, что знает про формат
+чекпоинта и про сборку модели по конфигу, плюс обход теста через `DataLoader`.
+
+Свой обход, а не библиотечный `aic.submit.predict_folder`: тот читает кадры
+последовательно в основном процессе, и на полном тесте декодирование JPEG
+становится узким местом. Здесь чтение идёт воркерами. Библиотечный раннер
+проще и годится для ноутбука, этот — для настоящей посылки.
 """
 
 from __future__ import annotations
@@ -17,21 +22,14 @@ from torch.utils.data import DataLoader
 
 from .config import Cfg
 from .datasets import PredictDataset, SegDataset
-from .imageio import imwrite
-from .metrics import AICAccumulator
+from aic.data import imwrite
+from aic.metric import AICAccumulator
+from aic.submit import TTA_OPS, postprocess, to_original
 from .models import build_model
 from .transforms import build_transform
 from .utils import pick_device
 
-TTA_OPS = {
-    "none": (lambda t: t, lambda t: t),
-    "hflip": (lambda t: torch.flip(t, dims=[-1]), lambda t: torch.flip(t, dims=[-1])),
-    "vflip": (lambda t: torch.flip(t, dims=[-2]), lambda t: torch.flip(t, dims=[-2])),
-    "hvflip": (
-        lambda t: torch.flip(t, dims=[-2, -1]),
-        lambda t: torch.flip(t, dims=[-2, -1]),
-    ),
-}
+
 
 
 def load_checkpoint(path: str | Path, device: torch.device | None = None, use_ema: bool = True):
@@ -63,20 +61,6 @@ def _forward_tta(model, images: torch.Tensor, tta: Sequence[str], amp: str):
         prob_sum = probs if prob_sum is None else prob_sum + probs
         cls_sum = cls if cls_sum is None else cls_sum + cls
     return prob_sum / len(tta), cls_sum / len(tta)
-
-
-def _to_original(prob: torch.Tensor, orig_h: int, orig_w: int, val_mode: str) -> np.ndarray:
-    """(1, S, S) на модельной сетке -> (H, W) в исходном разрешении."""
-    size = prob.shape[-1]
-    if val_mode == "pad":
-        scale = size / float(max(orig_h, orig_w))
-        h = max(1, int(round(orig_h * scale)))
-        w = max(1, int(round(orig_w * scale)))
-        prob = prob[..., :h, :w]
-    resized = F.interpolate(
-        prob.unsqueeze(0), size=(orig_h, orig_w), mode="bilinear", align_corners=False
-    )
-    return resized.squeeze(0).squeeze(0).cpu().numpy()
 
 
 @torch.no_grad()
@@ -111,30 +95,13 @@ def predict_stream(
 
         for i in range(images.shape[0]):
             yield {
-                "prob": _to_original(
+                "prob": to_original(
                     probs[i], int(batch["orig_h"][i]), int(batch["orig_w"][i]), val_mode
                 ),
                 "cls_prob": float(cls_probs[i]),
                 "index": int(batch["index"][i]),
                 "name": batch["name"][i] if "name" in batch else None,
             }
-
-
-def postprocess(
-    prob: np.ndarray,
-    cls_prob: float,
-    *,
-    mask_threshold: float = 0.5,
-    cls_threshold: float = 0.0,
-    min_area: float = 0.0,
-) -> np.ndarray:
-    """Вероятности -> uint8 маска 0/255 с применением всех правил постобработки."""
-    mask = (prob >= mask_threshold)
-    if cls_prob < cls_threshold:
-        mask[:] = False
-    elif min_area > 0 and mask.mean() < min_area:
-        mask[:] = False
-    return (mask.astype(np.uint8)) * 255
 
 
 def predict_folder(

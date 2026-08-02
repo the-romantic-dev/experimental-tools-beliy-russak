@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from .metrics import AICAccumulator
+from aic.metric import AICAccumulator
 from .registry import OPTIMIZERS, SCHEDULERS, register_optimizer, register_scheduler
 from .utils import AverageMeter, format_seconds
 

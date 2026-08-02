@@ -18,7 +18,7 @@ import pandas as pd
 import pytest
 
 from aic_pipeline.datasets import SegDataset
-from aic_pipeline.imageio import imwrite
+from aic.data import imwrite
 from aic_pipeline.schema import find_unknown_keys
 from aic_pipeline.synth import (
     OPS,
@@ -218,7 +218,8 @@ def test_only_the_training_half_gets_synthesis(monkeypatch):
 
     folds = pd.DataFrame([{**frame(i), "fold": i % 2, "stem": f"s{i}"} for i in range(20)])
     monkeypatch.setattr(train_module, "SegDataset", Spy)
-    monkeypatch.setattr(train_module, "load_folds", lambda: folds)
+    # путь к сплиту теперь обязателен: aic.data.load_folds(path)
+    monkeypatch.setattr(train_module, "load_folds", lambda _path: folds)
 
     cfg = load_config("h1_synth", ["train.num_workers=0"])
     train_module.build_dataloaders(cfg, logging.getLogger("test-synth"))

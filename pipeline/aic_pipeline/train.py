@@ -27,11 +27,11 @@ from .datasets import SegDataset, build_sampler
 from .engine import build_optimizer, build_scheduler, train_one_epoch, validate
 from .logging_utils import RunLogger
 from .losses import build_loss
-from .metrics import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID, AICAccumulator
+from aic.metric import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID, AICAccumulator
 from .models import build_model, count_parameters
 from .models.aux_heads import parse_aux_spec
 from .provenance import write_environment
-from .splits import load_folds
+from aic.data import load_folds
 from .stats import (
     compare_to_reference,
     gate_check,
@@ -42,6 +42,7 @@ from .stats import (
 )
 from .transforms import build_transform
 from .utils import ModelEma, gpu_memory_gb, make_run_dir, pick_device, seed_everything
+from .workspace import split_path
 
 
 def _subset(
@@ -162,7 +163,7 @@ def worker_init_fn(worker_id: int) -> None:
 
 
 def build_dataloaders(cfg: Cfg, logger: RunLogger) -> tuple[DataLoader, DataLoader, pd.DataFrame]:
-    folds = load_folds()
+    folds = load_folds(split_path())
     fold = int(cfg.train.get("fold", 0))
     seed = int(cfg.get("seed", 42))
 

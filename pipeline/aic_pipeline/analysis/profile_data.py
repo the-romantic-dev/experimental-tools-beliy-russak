@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..indexing import load_index
-from ..workspace import split_path
+from aic.data import load_index
+from ..workspace import index_path, split_path
 
 
 def _section(title: str, body: str) -> str:
@@ -17,7 +17,7 @@ def _section(title: str, body: str) -> str:
 
 
 def profile_dataset() -> str:
-    df = load_index()
+    df = load_index(index_path())
     parts = [f"# Профиль датасета\n\nстрок: {len(df)}, групп (исходных кадров): {df['group_id'].nunique()}"]
 
     negatives = df["is_negative"]
@@ -67,9 +67,9 @@ def profile_dataset() -> str:
     ))
 
     if split_path().exists():
-        from ..splits import check_leakage, load_folds
+        from aic.data import check_leakage, load_folds
 
-        folds = load_folds()
+        folds = load_folds(split_path())
         leak = check_leakage(folds)
         parts.append(_section(
             "Фолды",

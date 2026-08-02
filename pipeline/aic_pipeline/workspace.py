@@ -1,17 +1,13 @@
-"""Единая точка правды про то, где что лежит.
+"""Воркспейс пайплайна: синглтон поверх `aic.Workspace` плюс конфиги и планы.
 
-Воркспейс — это папка с данными, конфигами и прогонами. Раньше она совпадала с
-папкой, из которой импортировался код, и путь считался как `<пакет>/..`. Теперь
-код — установленная библиотека и может лежать где угодно, поэтому корень ищется
-отдельно от него:
+Все пути считает библиотека. Здесь остаётся то, чего в ней нет намеренно:
 
-1. явно заданный `set_workspace(path)`;
-2. переменная среды `AIC_WORKSPACE`;
-3. ближайшая вверх от текущей папки директория, внутри которой есть `configs/`;
-4. текущая рабочая папка.
-
-Пункт 3 покрывает обычную работу в клоне репозитория: и из корня, и из
-`notebooks/` находится один и тот же воркспейс.
+* синглтон. Библиотека глобального состояния не держит, а CLI без него неудобен:
+  `aic train -c baseline` не должен требовать путь в каждой команде. Это
+  свойство ЭТОГО слоя, и живёт оно здесь;
+* `configs/` и `plans/` — места, о которых знает только пайплайн;
+* поиск корня по `configs/`, а не по `data/`: без конфигов команда
+  `aic train -c ...` всё равно ничего не сделает.
 
 Пути отдаются функциями, а не константами. Константу вида `RUNS_ROOT` вызывающий
 код забрал бы через `from .workspace import RUNS_ROOT` один раз на импорте, и
@@ -24,86 +20,14 @@ import contextlib
 import os
 from pathlib import Path
 
-WORKSPACE_ENV = "AIC_WORKSPACE"
-#: по наличию этой папки воркспейс и опознаётся при поиске вверх
+from aic.paths import WORKSPACE_ENV, Workspace as _Workspace
+
+#: по наличию этой папки воркспейс пайплайна и опознаётся при поиске вверх
 MARKER = "configs"
 
 
-class Workspace:
-    """Корень воркспейса и все производные от него пути."""
-
-    def __init__(self, root: str | Path) -> None:
-        self.root = Path(root).resolve()
-
-    def __repr__(self) -> str:
-        return f"Workspace({str(self.root)!r})"
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Workspace) and self.root == other.root
-
-    # --- данные ---------------------------------------------------------
-
-    @property
-    def data(self) -> Path:
-        return self.root / "data"
-
-    @property
-    def dataset_root(self) -> Path:
-        # в CSV пути записаны относительно этой папки: "stage1/train/img/....jpg"
-        return self.data / "train_stage1"
-
-    @property
-    def train_csv(self) -> Path:
-        return self.dataset_root / "stage1" / "train.csv"
-
-    @property
-    def src_dir(self) -> Path:
-        return self.dataset_root / "stage1" / "train" / "src"
-
-    @property
-    def cache(self) -> Path:
-        return self.data / "cache"
-
-    # тестовая выборка: пути внутри test.csv заданы относительно папки с CSV
-    @property
-    def test_root(self) -> Path:
-        return self.data / "test_stage1" / "test_stage1"
-
-    @property
-    def test_csv(self) -> Path:
-        return self.test_root / "test.csv"
-
-    @property
-    def submission_template(self) -> Path:
-        return self.test_root / "submission.csv"
-
-    @property
-    def test_img_dir(self) -> Path:
-        return self.test_root / "test_stage1_img"
-
-    # --- результаты работы ----------------------------------------------
-
-    @property
-    def artifacts(self) -> Path:
-        return self.root / "artifacts"
-
-    @property
-    def index_path(self) -> Path:
-        return self.artifacts / "index.parquet"
-
-    @property
-    def split_path(self) -> Path:
-        return self.artifacts / "folds.parquet"
-
-    @property
-    def runs(self) -> Path:
-        return self.root / "runs"
-
-    @property
-    def submissions(self) -> Path:
-        return self.root / "submissions"
-
-    # --- описания экспериментов -----------------------------------------
+class Workspace(_Workspace):
+    """`aic.Workspace` плюс места, о которых знает только пайплайн."""
 
     @property
     def configs(self) -> Path:
@@ -113,25 +37,10 @@ class Workspace:
     def plans(self) -> Path:
         return self.root / "plans"
 
-    # --- операции --------------------------------------------------------
-
-    def resolve(self, rel_path: str, root: Path | None = None) -> Path:
-        """Путь из CSV -> абсолютный путь на диске."""
-        base = self.dataset_root if root is None else Path(root)
-        return base / str(rel_path).replace("\\", "/")
-
-    def ensure_dirs(self) -> None:
-        for directory in (self.artifacts, self.runs, self.cache, self.submissions):
-            directory.mkdir(parents=True, exist_ok=True)
-
 
 def find_workspace_root(start: str | Path | None = None) -> Path:
     """Ближайшая вверх папка с `configs/`; если такой нет — сама `start`."""
-    current = Path(start or Path.cwd()).resolve()
-    for candidate in (current, *current.parents):
-        if (candidate / MARKER).is_dir():
-            return candidate
-    return current
+    return Workspace.find(start, marker=MARKER).root
 
 
 _current: Workspace | None = None

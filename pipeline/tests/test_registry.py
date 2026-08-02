@@ -44,7 +44,7 @@ def workspace_with_plugin(tmp_path):
 
 
 def test_register_works_as_decorator_and_as_plain_call():
-    shelf = Registry("проба", "проба", "fn()", builtins=".metrics")
+    shelf = Registry("проба", "проба", "fn()", builtins=".geometry")
 
     @shelf.register("через-декоратор")
     def first():

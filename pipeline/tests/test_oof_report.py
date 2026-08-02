@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from aic_pipeline.metrics import AICAccumulator
+from aic.metric import AICAccumulator
 from aic_pipeline.analysis.oof_report import MISS_DICE, OofView, by_area, compare, report
 from aic_pipeline.analysis.oof_report import _frame
 

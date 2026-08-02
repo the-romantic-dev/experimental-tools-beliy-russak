@@ -32,25 +32,24 @@ from .metric import FP_AREA_THRESHOLD
 
 REQUIRED_COLUMNS = ["img_path", "prediction_path"]
 
-#: виды TTA: (прямое преобразование входа, обратное для предсказания)
-TTA_OPS: dict[str, tuple[Callable, Callable]] = {}
+def _flip(dims: list[int]) -> Callable:
+    """Отражение по осям. torch импортируется внутри: модуль читают и без него."""
+    def op(tensor):
+        import torch
+
+        return torch.flip(tensor, dims=dims)
+
+    return op
 
 
-def _init_tta() -> None:
-    """Заполняется лениво: словарь замыканий на torch, а torch тут не обязателен."""
-    import torch
-
-    if TTA_OPS:
-        return
-    TTA_OPS.update({
-        "none": (lambda t: t, lambda t: t),
-        "hflip": (lambda t: torch.flip(t, dims=[-1]), lambda t: torch.flip(t, dims=[-1])),
-        "vflip": (lambda t: torch.flip(t, dims=[-2]), lambda t: torch.flip(t, dims=[-2])),
-        "hvflip": (
-            lambda t: torch.flip(t, dims=[-2, -1]),
-            lambda t: torch.flip(t, dims=[-2, -1]),
-        ),
-    })
+#: виды TTA: (прямое преобразование входа, обратное для предсказания). Все
+#: обратимы сами собой, поэтому пара всюду одинаковая
+TTA_OPS: dict[str, tuple[Callable, Callable]] = {
+    "none": (lambda t: t, lambda t: t),
+    "hflip": (_flip([-1]), _flip([-1])),
+    "vflip": (_flip([-2]), _flip([-2])),
+    "hvflip": (_flip([-2, -1]), _flip([-2, -1])),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +191,6 @@ def predict_folder(
     """
     import torch
 
-    _init_tta()
     paths = [Path(p) for p in paths]
     if not paths:
         raise ValueError("список изображений пуст")

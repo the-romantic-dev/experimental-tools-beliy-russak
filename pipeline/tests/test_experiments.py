@@ -17,9 +17,9 @@ import torch.nn.functional as F
 
 from aic_pipeline.datasets import build_balanced_sampler, valid_region
 from aic_pipeline.engine import SCRATCH_MARKERS, _histograms, build_optimizer
-from aic_pipeline.inference import _to_original
+from aic.submit import to_original as _to_original
 from aic_pipeline.losses import build_loss, soft_dice_loss
-from aic_pipeline.metrics import AICAccumulator
+from aic.metric import AICAccumulator
 from aic_pipeline.models import build_model
 from aic_pipeline.streams import BayarConv, InputFusion, ResidualExtractor, SRMConv, encoder_strides
 
@@ -268,7 +268,7 @@ def test_predicted_area_never_exceeds_the_frame_in_pad_mode():
     accumulator = AICAccumulator(n_bins=32)
     accumulator.update_hist(hist_all, hist_gt, gt_sum, n_pixels, np.array([1.0]))
 
-    predicted, _, _, pixels, _ = accumulator._tables()
+    predicted, _, _, pixels, _ = accumulator.tables()
     assert (predicted[:, 0] / pixels[0] <= 1.0).all()
 
 

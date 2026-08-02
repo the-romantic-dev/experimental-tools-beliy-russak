@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from ..datasets import SegDataset, _read_image, _read_mask  # noqa: E402
 from ..inference import load_checkpoint, predict_stream  # noqa: E402
-from ..metrics import dice_binary  # noqa: E402
+from aic.metric import dice_binary  # noqa: E402
 from ..workspace import resolve  # noqa: E402
 from ..transforms import build_transform  # noqa: E402
 from ..utils import pick_device  # noqa: E402

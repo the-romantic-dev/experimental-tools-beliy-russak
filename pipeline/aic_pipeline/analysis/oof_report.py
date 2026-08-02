@@ -29,40 +29,26 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..metrics import DEFAULT_AREA_GRID, FP_AREA_THRESHOLD, harmonic_aic
-
-MISS_DICE = 0.05  # ниже этого предсказание считаем полным промахом, а не неточностью
-AREA_BINS = (0.0, 0.01, 0.03, 0.06, 0.12, 0.25, 0.5, 1.01)
+from aic.analysis import AREA_BINS, MISS_DICE, OofView as _OofView
+from aic.metric import DEFAULT_AREA_GRID, FP_AREA_THRESHOLD, harmonic_aic
 
 
-class OofView:
-    """Развёрнутые из гистограмм таблицы |P_t|, |P_t ∩ G| и производные."""
+
+class OofView(_OofView):
+    """Библиотечный разбор валидации плюс то, что знает про папку прогона.
+
+    Разворот гистограмм в |P_t| и |P_t ∩ G| больше не дублируется: он приходит
+    из `aic.analysis.OofView`, то есть из `AICAccumulator.tables()`. Здесь
+    остаются операционная точка из `calib.json` и форматирование отчёта.
+    """
 
     def __init__(self, run_dir: str | Path) -> None:
         self.run_dir = Path(run_dir)
-        data = np.load(self.run_dir / "oof" / "val.npz")
-
-        self.n_bins = int(data["n_bins"])
-        hist_all = data["hist_all"].astype(np.int64)
-        hist_gt = data["hist_gt"].astype(np.int64)
-        # |P_t| для t = k / n_bins  <=>  сумма бинов с индексом >= k
-        self.pred = np.cumsum(hist_all[:, ::-1], axis=1)[:, ::-1].astype(np.float64)
-        self.inter = np.cumsum(hist_gt[:, ::-1], axis=1)[:, ::-1].astype(np.float64)
-
-        self.gt_sum = data["gt_sum"].astype(np.float64)
-        self.n_pixels = data["n_pixels"].astype(np.float64)
-        self.cls_prob = data["cls_prob"].astype(np.float64)
-
-        self.area = self.pred / self.n_pixels[:, None]
-        self.dice = 2.0 * self.inter / (self.pred + self.gt_sum[:, None] + 1e-6)
-        self.is_pos = self.gt_sum > 0
-        self.gt_frac = self.gt_sum / self.n_pixels
-
-        rows_path = self.run_dir / "oof" / "val_rows.parquet"
-        self.rows = pd.read_parquet(rows_path) if rows_path.exists() else None
+        built = _OofView.from_run(run_dir)
+        super().__init__(built.ev, built.rows)
 
     def bin_of(self, threshold: float) -> int:
-        return int(np.clip(int(threshold * self.n_bins), 0, self.n_bins - 1))
+        return self._bin_index(threshold)
 
     def keep_mask(self, k: int, cls_threshold: float, min_area: float) -> np.ndarray:
         """Кадры, которые постобработка оставляет непустыми — как в `AICAccumulator.sweep`."""
@@ -71,10 +57,7 @@ class OofView:
     def score(
         self, mask_threshold: float, cls_threshold: float = 0.0, min_area: float = 0.0
     ) -> dict:
-        k = self.bin_of(mask_threshold)
-        keep = self.keep_mask(k, cls_threshold, min_area)
-        dice = np.where(keep, self.dice[:, k], 0.0)
-        area = np.where(keep, self.area[:, k], 0.0)
+        dice, area = self.at((mask_threshold, cls_threshold, min_area))
         dice_pos = float(dice[self.is_pos].mean()) if self.is_pos.any() else 0.0
         fpr = float((area[~self.is_pos] >= FP_AREA_THRESHOLD).mean()) if (~self.is_pos).any() else 0.0
         return {"aic": harmonic_aic(dice_pos, fpr), "dice_pos": dice_pos, "fpr_neg": fpr}

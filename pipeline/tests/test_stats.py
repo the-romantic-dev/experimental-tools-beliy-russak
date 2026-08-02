@@ -16,7 +16,7 @@ import pytest
 import yaml
 
 from aic_pipeline.config import load_config
-from aic_pipeline.metrics import AICAccumulator, harmonic_aic
+from aic.metric import AICAccumulator, harmonic_aic
 from aic_pipeline.schema import find_unknown_keys
 from aic_pipeline.stats import (
     Boot,

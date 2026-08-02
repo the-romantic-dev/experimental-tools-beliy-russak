@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .metrics import (
+from aic.metric import (
     DEFAULT_AREA_GRID,
     DEFAULT_CLS_GRID,
     DEFAULT_MASK_GRID,

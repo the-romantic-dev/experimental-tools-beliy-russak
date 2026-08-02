@@ -319,7 +319,19 @@ class Run:
         path = self.dir / "oof" / f"{name}.npz"
         if not path.exists():
             raise FileNotFoundError(f"нет {path}")
-        return Eval(AICAccumulator.load(path), self.load_rows(name)["stem"].to_numpy())
+        acc = AICAccumulator.load(path)
+        rows = self.load_rows(name)
+        try:
+            return Eval(acc, rows["stem"].to_numpy())
+        except ValueError as error:
+            # к общей формулировке добавляем, ЧТО именно разошлось на диске:
+            # без имён файлов сообщение не подсказывает, что чинить
+            raise ValueError(
+                f"{self.dir.name}: в {name}.npz {len(acc)} кадров, а в "
+                f"{name}_rows.parquet {len(rows)} строк. Сопоставление идёт по "
+                f"stem'ам в порядке этих строк, и на разной длине оно молча "
+                f"смешало бы разные кадры"
+            ) from error
 
     def operating_point(self, name: str = "val") -> tuple[float, float, float]:
         """`(mask_threshold, cls_threshold, min_area)` из сводки, иначе свипом.
