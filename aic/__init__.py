@@ -66,6 +66,9 @@ _EXPORTS: dict[str, str] = {
     "load_folds": "data",
     # бюджет
     "count_gflops": "budget",
+    # сабмит
+    "predict_folder": "submit",
+    "validate_submission": "submit:validate",
 }
 
 __all__ = ["__version__", *sorted(_EXPORTS)]
