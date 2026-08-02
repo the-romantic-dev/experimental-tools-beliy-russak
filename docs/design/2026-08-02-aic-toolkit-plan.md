@@ -61,6 +61,15 @@ opencv-python-headless, pillow. torch — только через extra, имп�
 Переезжают в фазе 2: `experimental_tools_beliy_russak/` → `pipeline/aic_pipeline/`,
 `tests/pipeline/` → `pipeline/tests/`.
 
+**В библиотеку не идут, остаются пайплайном** (решено отдельно, в раскладку
+спеки эти модули не попали):
+
+* `compliance.py` — ограничения регламента помимо бюджета: источник весов
+  энкодера и недостижимость путей теста из обучающего кода. Читает секцию
+  `model` конфига, то есть завязан на форму конфига пайплайна;
+* `provenance.py` — запись окружения в папку прогона. Завязана на конкретный
+  набор пакетов, а не на формат папки.
+
 ---
 
 ## Фаза 1. Библиотека
@@ -68,9 +77,15 @@ opencv-python-headless, pillow. torch — только через extra, имп�
 ### Task 1: Скелет пакета и разделение тестов
 
 **Files:**
-- Create: `aic/__init__.py`, `tests/aic/__init__.py`, `tests/aic/conftest.py`,
-  `tests/aic/test_import.py`
+- Create: `aic/__init__.py`, `tests/aic/conftest.py`, `tests/aic/test_import.py`
 - Create: `tests/pipeline/__init__.py`
+
+**В `tests/aic/` НЕ должно быть `__init__.py`.** С ним каталог тестов
+становится импортируемым пакетом по имени `aic` и затеняет библиотеку: pytest
+кладёт `tests/` в `sys.path`, и внутрипроцессный `import aic` приводит в
+каталог тестов. Подпроцессные проверки при этом проходят (у них свой
+`PYTHONPATH`), так что расхождение выглядит необъяснимым. У `tests/pipeline/`
+`__init__.py` нужен — там имена файлов пересекаются с будущими.
 - Modify: `pyproject.toml`
 - Move: `tests/*.py` → `tests/pipeline/*.py` (все 24 файла, включая `conftest.py`)
 

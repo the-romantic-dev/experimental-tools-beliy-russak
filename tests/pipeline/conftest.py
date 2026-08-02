@@ -16,7 +16,7 @@ import pytest
 
 from experimental_tools_beliy_russak.workspace import set_workspace
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 set_workspace(REPO_ROOT)
 

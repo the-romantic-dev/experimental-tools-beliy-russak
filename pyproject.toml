@@ -65,7 +65,9 @@ aic = "experimental_tools_beliy_russak.cli:app"
 version = { attr = "experimental_tools_beliy_russak.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["experimental_tools_beliy_russak*"]
+# оба пакета на время переезда: пайплайн продолжает работать, пока библиотека
+# собирается рядом. В фазе 2 останется один
+include = ["aic*", "experimental_tools_beliy_russak*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
