@@ -22,10 +22,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from . import budget
-from .config import Cfg, config_hash, flatten, save_config
+from .config import Cfg, config_hash, get_path
 from .datasets import SegDataset, build_sampler
 from .engine import build_optimizer, build_scheduler, train_one_epoch, validate
-from .logging_utils import RunLogger
+from aic.runs import Run
 from .losses import build_loss
 from aic.metric import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID, AICAccumulator
 from .models import build_model, count_parameters
@@ -41,8 +41,8 @@ from .stats import (
     stats_settings,
 )
 from .transforms import build_transform
-from .utils import ModelEma, gpu_memory_gb, make_run_dir, pick_device, seed_everything
-from .workspace import split_path
+from .utils import ModelEma, gpu_memory_gb, pick_device, seed_everything
+from .workspace import runs_root, split_path
 
 
 def _subset(
@@ -162,7 +162,7 @@ def worker_init_fn(worker_id: int) -> None:
         setter(seed)
 
 
-def build_dataloaders(cfg: Cfg, logger: RunLogger) -> tuple[DataLoader, DataLoader, pd.DataFrame]:
+def build_dataloaders(cfg: Cfg, logger) -> tuple[DataLoader, DataLoader, pd.DataFrame]:
     folds = load_folds(split_path())
     fold = int(cfg.train.get("fold", 0))
     seed = int(cfg.get("seed", 42))
@@ -236,6 +236,25 @@ def build_dataloaders(cfg: Cfg, logger: RunLogger) -> tuple[DataLoader, DataLoad
     return train_loader, val_loader, val_df
 
 
+def epoch_samples(cfg, n_train_rows: int) -> int:
+    """Сколько кадров показывается за эпоху.
+
+    Ось сравнения прогонов — ЧИСЛО ПОКАЗОВ, а не номер эпохи: иначе плечо с
+    `epoch_size: 4000, epochs: 12` нельзя сопоставить с эталоном 8000x6.
+    """
+    return int(get_path(cfg, "data.epoch_size") or n_train_rows)
+
+
+def open_run_record(runs_dir, name: str, cfg, *, resume: bool = False) -> Run:
+    """Папка прогона со снапшотом конфига. Отдельной функцией — ради теста."""
+    record = Run.create(
+        runs_dir, name, resume=resume,
+        tensorboard=bool(get_path(cfg, "tensorboard", True)),
+    )
+    record.save_snapshot(dict(cfg))
+    return record
+
+
 def run(cfg: Cfg, resume: str | None = None) -> dict:
     # Бюджет вычислений — самое первое, что проверяется: прогон вне лимита
     # получил бы 0 за этап, и тратить на него ни данные, ни карту, ни папку в
@@ -247,9 +266,8 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
 
     seed_everything(int(cfg.get("seed", 42)), bool(cfg.get("deterministic", False)))
     name = cfg.get("name") or f"{cfg.model.get('arch')}-{config_hash(cfg)}"
-    run_dir = make_run_dir(str(name), resume=bool(resume))
-    logger = RunLogger(run_dir, use_tensorboard=bool(cfg.get("tensorboard", True)))
-    save_config(cfg, run_dir / "config.yaml")
+    logger = open_run_record(runs_root(), str(name), cfg, resume=bool(resume))
+    run_dir = logger.dir
     # снапшота конфига мало: тот же конфиг на другой версии timm даёт другую сеть
     write_environment(run_dir)
     logger.info(f"прогон: {run_dir.name}  ->  {run_dir}")
@@ -346,7 +364,7 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
             "gpu_gb": round(gpu_memory_gb(), 2),
             **gate_metrics(gate),
         }
-        logger.log_metrics(epoch, metrics)
+        logger.log(epoch, {**metrics, "samples": (epoch + 1) * per_epoch})
         nan_note = (
             f" | ПРОПУЩЕНО nan-шагов: {train_stats['nan_steps']}"
             if train_stats.get("nan_steps") else ""
@@ -376,12 +394,11 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
             model, ema, optimizer, scheduler, cfg,
             epoch=epoch, best=best, calib=tuned.as_dict(), scaler=scaler,
         )
-        torch.save(state, run_dir / "ckpt" / "last.pt")
+        logger.save_state(state, "last.pt")
 
         if improved:
-            torch.save(state, run_dir / "ckpt" / "best.pt")
-            accumulator.save(run_dir / "oof" / "val.npz")
-            val_df.to_parquet(run_dir / "oof" / "val_rows.parquet", index=False)
+            logger.save_state(state, "best.pt")
+            logger.save_eval(accumulator, val_df)
             logger.info(f"  новый лучший AIC {best:.4f} -> ckpt/best.pt")
         elif patience and since_improved >= patience:
             logger.info(f"ранняя остановка: {patience} эпох без улучшения")
@@ -409,7 +426,7 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
         summary["killed_reason"] = f"гейт по эталону {reference.name} на эпохе {epoch}"
 
     if reference is not None and best_result is not None and not gate_stop:
-        saved = AICAccumulator.load(run_dir / "oof" / "val.npz")
+        saved = logger.load_eval().acc
         # Сопоставление идёт по stem'ам, а в аккумуляторе кадры лежат в порядке
         # val_df. Усечённая валидация (train.max_val_steps) даёт кадров меньше,
         # чем строк, и тогда индексы разъезжаются — считать вердикт по огрызку
@@ -435,10 +452,7 @@ def run(cfg: Cfg, resume: str | None = None) -> dict:
             for line in comparison.report(reference.name):
                 logger.info(line)
 
-    (run_dir / "summary.json").write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    logger.log_hparams(flatten(dict(cfg)), {"best_aic": best})
+    logger.save_summary(summary)
     logger.info(f"готово. лучший AIC={best:.4f}. Всё в {run_dir}")
     logger.close()
     return summary

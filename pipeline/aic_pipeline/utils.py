@@ -11,7 +11,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .workspace import runs_root
 
 
 def seed_everything(seed: int = 42, deterministic: bool = False) -> None:
@@ -83,19 +82,6 @@ def gpu_memory_gb() -> float:
     if not torch.cuda.is_available():
         return 0.0
     return torch.cuda.max_memory_allocated() / 1e9
-
-
-def make_run_dir(name: str, resume: bool = False) -> Path:
-    """runs/<name>; при коллизии добавляется суффикс, чтобы ничего не затирать."""
-    runs = runs_root()
-    runs.mkdir(parents=True, exist_ok=True)
-    run_dir = runs / name
-    if run_dir.exists() and not resume:
-        stamp = time.strftime("%m%d-%H%M%S")
-        run_dir = runs / f"{name}__{stamp}"
-    for sub in ("ckpt", "oof", "tb", "preds"):
-        (run_dir / sub).mkdir(parents=True, exist_ok=True)
-    return run_dir
 
 
 def format_seconds(seconds: float) -> str:

@@ -69,11 +69,8 @@ _EXPORTS: dict[str, str] = {
     "preflight": "plans",
     "describe_plan": "plans:describe",
     # прогон
-    "RunLogger": "logging_utils",
-    "read_metrics": "logging_utils",
     "seed_everything": "utils",
     "pick_device": "utils",
-    "make_run_dir": "utils",
     "AverageMeter": "utils",
     "ModelEma": "utils",
     "train_run": "train:run",
