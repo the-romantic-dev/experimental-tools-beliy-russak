@@ -4,12 +4,22 @@
 предсказать маску изменённой области. Метрика — **AIC Score**, гармоническое
 среднее `Dice_pos` и `1 − FPR_neg`.
 
-Код собран в переиспользуемый пакет **`experimental_tools_beliy_russak`**.
-Репозиторий делится надвое: пакет — это инструмент, а `configs/`, `data/`,
-`runs/` и `artifacts/` — воркспейс, свой у каждого.
+Код делится на два слоя.
+
+**`aic` — библиотека инструментов.** Метрика, достоверность прироста, бюджет
+GFLOPs, папка прогона, данные, сабмит. Способ обучения она не регламентирует:
+цикл, архитектура и лоссы — ваши. Ставится без timm, smp и albumentations,
+переиспользуется в любом ноутбуке с рукописной моделью на торче. Одна страница
+на весь путь — **[docs/aic-quickstart.md](docs/aic-quickstart.md)**.
+
+**`aic_pipeline` — эталонный пайплайн поверх неё.** YAML-конфиги с наследованием,
+реестры компонент, сборка моделей, очередь экспериментов и команда `aic train`.
+Один из возможных способов работы, а не обязательный.
+
+`configs/`, `data/`, `runs/` и `artifacts/` — воркспейс, свой у каждого.
 
 Условия задачи — [AI Challenge Stage 1.md](AI%20Challenge%20Stage%201.md).
-Подробное руководство — **[GUIDE.md](GUIDE.md)**.
+Подробное руководство по пайплайну — **[GUIDE.md](GUIDE.md)**.
 
 ## Быстрый старт
 
@@ -40,14 +50,23 @@ aic train -c baseline
 
 ## Установка
 
-Только библиотека, без клона репозитория:
+Только инструменты — в свой ноутбук, без клона репозитория:
 
 ```bash
 pip install git+https://github.com/the-romantic-dev/experimental-tools-beliy-russak.git
 ```
 
-Так приезжает код и команда `aic`. Конфиги и планы в колесо **не входят** — это
-контент, а не инструмент; свой воркспейс собирается отдельно (см. ниже).
+Приезжает `aic` и ничего лишнего: ни timm, ни smp, ни albumentations. Дальше —
+[docs/aic-quickstart.md](docs/aic-quickstart.md).
+
+Плюс эталонный пайплайн и команда `aic train`:
+
+```bash
+pip install "aic[pipeline] @ git+https://github.com/the-romantic-dev/experimental-tools-beliy-russak.git"
+```
+
+Конфиги и планы в колесо **не входят** — это контент, а не инструмент; свой
+воркспейс собирается отдельно (см. ниже).
 
 Для работы над самим тулкитом — клон и editable-установка:
 
@@ -62,15 +81,15 @@ PyPI и другой версией CUDA. Ставится он отдельно
 Из Python:
 
 ```python
-import experimental_tools_beliy_russak as etbr
+import aic_pipeline as aic_pipeline
 
-cfg = etbr.load_config("baseline", ["train.lr=1e-4"])
-board = etbr.leaderboard()
+cfg = aic_pipeline.load_config("baseline", ["train.lr=1e-4"])
+board = aic_pipeline.leaderboard()
 ```
 
 Где искать данные и куда писать прогоны, пакет определяет сам: переменная
 `AIC_WORKSPACE`, иначе ближайшая вверх папка с `configs/`. Переключить руками —
-`etbr.set_workspace(...)`. Подробнее — [GUIDE.md](GUIDE.md), раздел 2.
+`aic_pipeline.set_workspace(...)`. Подробнее — [GUIDE.md](GUIDE.md), раздел 2.
 
 ## Свои компоненты
 
@@ -80,7 +99,7 @@ timm. Свой **вид** сущности (лосс, пресет аугмен�
 правки библиотеки:
 
 ```python
-from experimental_tools_beliy_russak import register_loss
+from aic_pipeline import register_loss
 
 @register_loss("soft_iou")
 def soft_iou(logits, targets, *, smooth=1.0):

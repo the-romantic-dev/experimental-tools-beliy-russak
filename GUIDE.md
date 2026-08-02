@@ -1,6 +1,6 @@
 # Гайд по тулкиту
 
-Код лежит в пакете `experimental_tools_beliy_russak`, установленном в среду.
+Код лежит в пакете `aic_pipeline`, установленном в среду.
 Всё запускается через один вход. Обёртки подставляют нужный интерпретатор,
 чтобы не писать путь к conda-среде руками:
 
@@ -59,7 +59,7 @@ cli.py               запускатель из корня: зовёт CLI па
 aic.ps1              обёртка для PowerShell
 aic.cmd              обёртка для cmd.exe (ASCII + CRLF — иначе cmd её не разберёт)
 
-experimental_tools_beliy_russak/   ← пакет
+aic_pipeline/   ← пакет
   workspace.py       где лежит воркспейс и все пути внутри него
   config.py          загрузка конфигов, наследование, переопределения из CLI
   indexing.py        train.csv -> artifacts/index.parquet
@@ -108,10 +108,10 @@ PyPI, с другой версией CUDA.
 Из Python пакет зовут так:
 
 ```python
-import experimental_tools_beliy_russak as etbr
+import aic_pipeline as aic_pipeline
 
-cfg = etbr.load_config("baseline", ["train.lr=1e-4"])
-board = etbr.leaderboard()
+cfg = aic_pipeline.load_config("baseline", ["train.lr=1e-4"])
+board = aic_pipeline.leaderboard()
 ```
 
 ### Где тулкит ищет данные
@@ -120,7 +120,7 @@ board = etbr.leaderboard()
 соседней задачи свои `data/` и `runs/`. Корень определяется в таком порядке,
 побеждает первое сработавшее:
 
-1. явный вызов `etbr.set_workspace("D:/projects/другая-задача")`;
+1. явный вызов `aic_pipeline.set_workspace("D:/projects/другая-задача")`;
 2. переменная среды `AIC_WORKSPACE`;
 3. ближайшая вверх от текущей папки директория, в которой есть `configs/`;
 4. текущая папка.
@@ -132,10 +132,10 @@ board = etbr.leaderboard()
 Временно переключиться, не трогая глобальное состояние:
 
 ```python
-from experimental_tools_beliy_russak.workspace import use_workspace
+from aic_pipeline.workspace import use_workspace
 
 with use_workspace("D:/projects/другая-задача"):
-    board = etbr.leaderboard()
+    board = aic_pipeline.leaderboard()
 ```
 
 ---
@@ -179,7 +179,7 @@ with use_workspace("D:/projects/другая-задача"):
 3. **Один оригинал = несколько строк.** В `vision` — до 15 манипуляций одного
    кадра. Без группового сплита валидация врёт.
 4. **Имена файлов — источник разметки по доменам и генераторам.** Разбор живёт в
-   `experimental_tools_beliy_russak/indexing.py`. Если появится новый формат
+   `aic/data.py`. Если появится новый формат
    имён, его надо туда добавить, иначе кадры разъедутся по фолдам (проверка на
    утечку это поймает).
 
@@ -272,7 +272,7 @@ AIC      = 2 · Dice_pos · (1 − FPR_neg) / (Dice_pos + (1 − FPR_neg))
 по факту непустой маски. Немного шума на чистом кадре ничего не стоит, а
 уверенное пятно на 2% кадра стоит полного штрафа за этот кадр.
 
-Реализация — `experimental_tools_beliy_russak/metrics.py`, покрыта тестами
+Реализация — `aic/metric.py`, покрыта тестами
 (`tests/test_metrics.py`), включая сверку быстрого гистограммного пути с прямым
 подсчётом по маскам.
 
@@ -345,7 +345,7 @@ configs\baseline.yaml: ключи, которых библиотека не зн
 библиотеки и без новой версии у всех:
 
 ```python
-from experimental_tools_beliy_russak import register_loss
+from aic_pipeline import register_loss
 
 @register_loss("soft_iou")
 def soft_iou(logits, targets, *, smooth=1.0):
@@ -704,10 +704,10 @@ AIC за счёт крупных масок при просевших мелки
 ## 13. Траблшутинг
 
 **`OMP: Error #15` при импорте torch.** В conda-среде две копии OpenMP.
-Лечится автоматически: `experimental_tools_beliy_russak/__init__.py` выставляет
-`KMP_DUPLICATE_LIB_OK`. Поэтому `import experimental_tools_beliy_russak` обязан
+Лечится автоматически: `aic_pipeline/__init__.py` выставляет
+`KMP_DUPLICATE_LIB_OK`. Поэтому `import aic_pipeline` обязан
 идти **первым** в любом новом скрипте, до torch и numpy. Любой импорт из пакета
-проходит через `__init__.py`, так что `from experimental_tools_beliy_russak.train
+проходит через `__init__.py`, так что `from aic_pipeline.train
 import run` тоже годится — важно лишь, чтобы это было раньше torch.
 
 **В cmd `.\aic.ps1` открывает файл в редакторе вместо запуска.** cmd не исполняет
@@ -740,7 +740,7 @@ ANSI, и кириллица в комментариях ломает разбо�
 
 **`утечка групп между фолдами: N` больше нуля.** Разбор имён не покрыл какой-то
 новый формат файлов. Смотри `parse_group_id` в
-`experimental_tools_beliy_russak/indexing.py` и тесты
+`aic/data.py` и тесты
 `tests/test_config_and_parsing.py`.
 
 **AIC на валидации хороший, на лидерборде — нет.** Три обычные причины: метрика

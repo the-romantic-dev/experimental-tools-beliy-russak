@@ -6,5 +6,10 @@
 # numpy, pandas, sklearn, PIL там уже есть). torch в зависимости пакета
 # намеренно не включён, чтобы pip не пытался подменить conda-сборку колесом
 # с PyPI — с другой версией CUDA.
+#
+# Это установка ДЛЯ РАБОТЫ НАД РЕПОЗИТОРИЕМ: и библиотека, и эталонный пайплайн.
+# Кому нужны только инструменты в своём ноутбуке — extras не нужны:
+#
+#   pip install git+https://github.com/the-romantic-dev/experimental-tools-beliy-russak.git
 
--e .[dev]
+-e .[pipeline,dev]
