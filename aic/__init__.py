@@ -55,6 +55,10 @@ _EXPORTS: dict[str, str] = {
     "seeds_needed": "stats",
     "paired_bootstrap": "stats",
     "diverged_keys": "stats",
+    # анализ
+    "leaderboard": "analysis",
+    "compare_table": "analysis",
+    "OofView": "analysis",
 }
 
 __all__ = ["__version__", *sorted(_EXPORTS)]
