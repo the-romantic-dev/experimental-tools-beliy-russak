@@ -89,7 +89,10 @@ def parse_domain(stem: str) -> str:
     if re.match(r"^D\d{2}_", stem):
         return "vision"
     if re.match(r"^\d+$", stem):
-        return "plain"
+        # "plain" — механическая склейка двух разных датасетов (см. отчёт
+        # по домену plain): 9-значный стем всегда без хэш-префикса в имени
+        # исходного файла и заметно хуже по Dice, чем 8-значный.
+        return "plain_l9" if len(stem) == 9 else "plain_l8"
     if re.match(r"^\d+_", stem):
         return "numid"
     return "other"
