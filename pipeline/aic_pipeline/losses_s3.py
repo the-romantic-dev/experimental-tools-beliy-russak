@@ -1,17 +1,24 @@
-"""Слагаемые лосса серии L, вынесенные из ноутбука 16.
+"""Слагаемые лосса серии L, вынесенные из ноутбука 16, плюс ML/CAML.
 
 В ячейке им не место по той же причине, что и датасету: ячейку нельзя покрыть
-тестом, а эти четыре функции — ровно тот код, где ошибка не падает, а тихо
+тестом, а эти функции — ровно тот код, где ошибка не падает, а тихо
 портит обучение. Терм, который всегда отдаёт ноль, неотличим от терма, которому
 нечего лечить, пока на него не посмотришь отдельно.
 
 Проверки: `tests/test_loss_terms.py`.
 
-Каждый терм включается своим весом и по умолчанию выключен. Ни один не заменяет
-`bce + dice + 0.3 cls` — все добавляются, поэтому плечо отличается от якоря
-ровно одним числом в конфиге.
+Два разных способа включения:
 
-Почему именно эти четыре — по замерам разбора ошибок прогона
+* серия L (`gated_seg_loss`, `component_recall_loss`, `far_false_positive_loss`,
+  `lovasz_hinge`) — АДДИТИВНЫЕ добавки. Каждый включается своим весом и по
+  умолчанию выключен; ни один не заменяет `bce + dice + 0.3 cls`, все
+  добавляются, поэтому плечо отличается от якоря ровно одним числом в
+  конфиге;
+* ML/CAML (`multiplicative_loss`, `caml_loss`) — ЗАМЕНА сегментационной части
+  якоря: `bce + dice` целиком уступает место произведению. Гейт (`cls`, вес
+  0.3) в замену не входит, см. `compute_loss`.
+
+Почему именно эти четыре терма серии L — по замерам разбора ошибок прогона
 `s3-T-mitb2-native640_long` (AIC 0.9070, 5025 позитивов валидации):
 
 * `gated_seg_loss` — гейт зануляет 157 верных позитивов, и ни один градиент за
@@ -46,6 +53,71 @@ def soft_dice_from_probs(probs, targets, smooth=1.0):
 
 def soft_dice(logits, targets, smooth=1.0):
     return soft_dice_from_probs(torch.sigmoid(logits), targets, smooth)
+
+
+# ── ML / CAML: мультипликативная комбинация BCE и Dice ──────────────────────
+#
+# Yokoi & Hotta, 2025, "Multiplicative Loss for Enhancing Semantic
+# Segmentation in Medical and Cellular Images". В отличие от серии L это не
+# добавка к `bce + dice`, а замена ЕЙ: сегментационная часть якоря
+# (`bce + dice`) целиком уступает место произведению. Гейт (`cls`, вес 0.3)
+# в произведение не входит и остаётся аддитивным слагаемым, как и раньше —
+# см. `compute_loss`.
+
+
+def multiplicative_loss(logits: torch.Tensor, targets: torch.Tensor,
+                        epsilon: float = 1e-7) -> torch.Tensor:
+    """L_ML = L_Dice * L_CE — произведение вместо суммы.
+
+    Смысл замены. У суммы `bce + dice` есть слепая зона: если один терм уже
+    мал, а другой ещё велик, градиент второго ничем не подкреплён — сумма
+    просто равна большему слагаемому. Произведение устроено иначе: оно мало
+    только тогда, когда малы ОБА множителя, поэтому лосс не гаснет, пока
+    хотя бы один компонент неточен.
+
+    Оба слагаемых считаются от логитов (сигмоида — внутри), `epsilon`
+    защищает `log` вероятности от нуля и знаменатель Dice — от деления на
+    ноль на пустой маске (см. `soft_dice_from_probs`, `smooth=epsilon`).
+    """
+    probs = torch.sigmoid(logits.float()).clamp(epsilon, 1.0 - epsilon)
+    ce = -(targets * probs.log() + (1.0 - targets) * (-probs).log1p()).mean()
+    dice = soft_dice_from_probs(probs, targets, smooth=epsilon)
+    return dice * ce
+
+
+def caml_loss(logits: torch.Tensor, targets: torch.Tensor,
+             epsilon: float = 1e-7) -> torch.Tensor:
+    """L_CAML = L_Dice * (L_CE)^alpha, alpha = (1 - p̄)^D.
+
+    Идея поверх ML: степень `alpha` подстраивает вес CE под то, насколько
+    модель уже уверена в среднем (`p̄`) и насколько хорошо она уже покрывает
+    маску (`D`, коэффициент Dice — не лосс, `D = 1 - L_Dice`). Неуверенная
+    и неточная модель получает alpha около 1 (CE входит почти как в ML);
+    уверенная и точная — alpha уходит к 0, и CE перестаёт доминировать над
+    Dice на последних процентах обучения.
+
+    `p̄` — среднее по ВСЕМУ батчу (все кадры, все пиксели), а не по пикселю.
+    Это Erratum статьи: пиксельное p̄ даёт свою степень на каждый пиксель, и
+    лосс перестаёт быть сопоставимым между кадрами с разной площадью маски.
+
+    `p̄`, `D` и сам `alpha` обязаны быть detached: это метрики текущего
+    состояния модели, которыми взвешивается CE, а не параметры, по которым
+    нужно дифференцировать. Не detach — и degree начинает подстраиваться под
+    лосс сама, вместо того чтобы просто отражать уверенность модели; на
+    практике это раскачивает обучение. Detach не выключает градиент по
+    logits вообще — он идёт как обычно через сами `dice` и `ce`, просто не
+    вторым путём через alpha.
+    """
+    probs = torch.sigmoid(logits.float()).clamp(epsilon, 1.0 - epsilon)
+    ce = -(targets * probs.log() + (1.0 - targets) * (-probs).log1p()).mean()
+    dice = soft_dice_from_probs(probs, targets, smooth=epsilon)
+
+    p_bar = probs.mean().detach()
+    dice_coef = (1.0 - dice).detach()
+    alpha = ((1.0 - p_bar) ** dice_coef).detach()
+
+    ce_clamped = ce.clamp(min=1e-6)
+    return dice * ce_clamped ** alpha
 
 
 # ── серия L: четыре терма под измеренный профиль ошибок ─────────────────────
@@ -166,15 +238,31 @@ def compute_loss(out, batch, cfg, progress: float = 1.0):
     даёт ноль, потому что его задавили, второй — потому что лечить нечего.
 
     `progress` — доля пройденного обучения, от неё идёт разогрев гейта.
+
+    Сегментационная часть якоря (`bce + dice`) заменяется на ML или CAML,
+    если конфиг просит `use_multiplicative`/`use_caml` (см. `multiplicative_
+    loss`, `caml_loss`). `use_caml` приоритетнее: включить оба разом означает
+    выбрать CAML. Гейт (`cls`, вес 0.3) в обоих режимах остаётся аддитивным
+    слагаемым — ML/CAML заменяют только произведение bce/dice, не весь лосс.
     """
     mask = batch["mask"]
     parts = {}
 
-    bce = F.binary_cross_entropy_with_logits(out["logits"], mask)
-    dice = soft_dice(out["logits"], mask)
+    if cfg.get("use_caml"):
+        seg = caml_loss(out["logits"], mask)
+        parts["caml"] = seg.detach()
+    elif cfg.get("use_multiplicative"):
+        seg = multiplicative_loss(out["logits"], mask)
+        parts["ml"] = seg.detach()
+    else:
+        bce = F.binary_cross_entropy_with_logits(out["logits"], mask)
+        dice = soft_dice(out["logits"], mask)
+        seg = bce + dice
+        parts["bce"], parts["dice"] = bce.detach(), dice.detach()
+
     cls = F.binary_cross_entropy_with_logits(out["cls_logits"], batch["label"])
-    total = bce + dice + 0.3 * cls
-    parts["bce"], parts["dice"], parts["cls"] = bce.detach(), dice.detach(), cls.detach()
+    total = seg + 0.3 * cls
+    parts["cls"] = cls.detach()
 
     aux_weight = float(cfg.get("aux_weight", 0.0))
     if aux_weight > 0 and "aux_logits" in out:
