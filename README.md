@@ -23,6 +23,13 @@ GFLOPs, папка прогона, данные, сабмит. Способ об
 
 ## Быстрый старт
 
+Linux и macOS:
+
+```bash
+./scripts/setup.sh          # зависимости, тесты, индекс, фолды, smoke
+./aic.sh train -c baseline  # первый эксперимент
+```
+
 PowerShell:
 
 ```powershell
@@ -37,13 +44,24 @@ scripts\setup.cmd
 aic train -c baseline
 ```
 
-Обе обёртки делают одно и то же — вызывают `cli.py` нужным интерпретатором.
-Ищут они его так: `AIC_PYTHON`, если задан, иначе привычный путь conda-среды,
-иначе `python` из PATH. На своей машине задаётся один раз:
+Все обёртки делают одно и то же — вызывают `cli.py` нужным интерпретатором.
+Ищут они его так: `AIC_PYTHON`, если задан, дальше активная среда и `.venv`
+в корне репозитория, иначе `python` из PATH. На своей машине задаётся один раз:
+
+```bash
+export AIC_PYTHON=/путь/к/python          # в ~/.bashrc
+```
 
 ```powershell
 [Environment]::SetEnvironmentVariable("AIC_PYTHON", "C:/путь/python.exe", "User")
 ```
+
+Если среда уже активирована, обёртки не нужны вовсе: `python cli.py train -c baseline`.
+Так это и работает в Kaggle и Colab, где интерпретатор один и он в PATH.
+
+Развернуть воркспейс с нуля на голом Linux-сервере с GPU — отдельный скрипт,
+[scripts/setup_server.sh](scripts/setup_server.sh): системные пакеты, колесо
+torch под версию драйвера, датасет.
 
 Если среда уже активирована, обёртки не нужны вовсе:
 `python cli.py train -c baseline`.
@@ -112,7 +130,7 @@ def soft_iou(logits, targets, *, smooth=1.0):
 
 ## Основные команды
 
-Ниже — форма для PowerShell. В cmd замени `.\aic.ps1` на `aic`.
+Ниже — форма для PowerShell. В cmd замени `.\aic.ps1` на `aic`, в bash — на `./aic.sh`.
 
 | Команда | Что делает |
 |---|---|
